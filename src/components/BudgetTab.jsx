@@ -139,10 +139,11 @@ function Section({ title, items, editingId, editFields, setEditFields, onEdit, o
       <div className="grid grid-cols-12 px-4 py-2 text-xs font-semibold uppercase tracking-widest"
         style={{ color: '#636366', borderBottom: '1px solid rgba(84,84,88,0.3)' }}>
         <div className="col-span-1">Code</div>
-        <div className="col-span-3">Description</div>
+        <div className="col-span-2">Description</div>
         <div className="col-span-2 text-right">Estimated</div>
         <div className="col-span-2 text-right">Bid / Actual</div>
-        <div className="col-span-2">Vendor</div>
+        <div className="col-span-1">Vendor</div>
+        <div className="col-span-2">Notes</div>
         <div className="col-span-1">Date Paid</div>
         <div className="col-span-1 text-center">Lock</div>
       </div>
@@ -163,13 +164,14 @@ function Section({ title, items, editingId, editFields, setEditFields, onEdit, o
             style={{ borderBottom: '1px solid rgba(84,84,88,0.2)' }}
           >
             <div className="col-span-1 font-mono text-xs" style={{ color: '#636366' }}>{item.code || ''}</div>
-            <div className="col-span-3 font-medium text-lbl truncate">{item.name}</div>
+            <div className="col-span-2 font-medium text-lbl truncate">{item.name}</div>
             <div className="col-span-2 text-right text-lbl2">{fmt(item.estimated_cost)}</div>
             <div className={`col-span-2 text-right font-semibold ${isOver ? 'text-neg' : isLocked ? 'text-pos' : 'text-lbl3'}`}>
               {item.actual_cost != null ? fmt(item.actual_cost) : '—'}
               {isOver && <span className="ml-1 text-xs">▲</span>}
             </div>
-            <div className="col-span-2 text-xs text-lbl2 truncate">{item.vendor || ''}</div>
+            <div className="col-span-1 text-xs text-lbl2 truncate">{item.vendor || ''}</div>
+            <div className="col-span-2 text-xs text-lbl2 truncate" title={item.notes || ''}>{item.notes || ''}</div>
             <div className="col-span-1 text-xs text-lbl3">
               {item.date_paid ? new Date(item.date_paid).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
             </div>
@@ -206,10 +208,20 @@ function EditRow({ fields, setFields, onSave, onCancel, onDelete }) {
     <div className="grid grid-cols-12 px-4 py-3 gap-1.5 text-sm"
       style={{ background: 'rgba(10,132,255,0.07)', borderBottom: '1px solid rgba(10,132,255,0.3)' }}>
       <div className="col-span-1"><input {...f('code')} placeholder="Code" /></div>
-      <div className="col-span-3"><input {...f('name')} placeholder="Description" /></div>
+      <div className="col-span-2"><input {...f('name')} placeholder="Description" /></div>
       <div className="col-span-2"><input {...f('estimated_cost')} placeholder="Est. $" /></div>
       <div className="col-span-2"><input {...f('actual_cost')} placeholder="Bid / Actual $" /></div>
-      <div className="col-span-2"><input {...f('vendor')} placeholder="Vendor" /></div>
+      <div className="col-span-1"><input {...f('vendor')} placeholder="Vendor" /></div>
+      <div className="col-span-2 relative">
+        <input {...f('notes')} placeholder="Notes" />
+        {fields.notes && (
+          <button
+            onClick={() => setFields(p => ({ ...p, notes: '' }))}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-lbl3 hover:text-neg text-xs leading-none"
+            title="Clear note"
+          >✕</button>
+        )}
+      </div>
       <div className="col-span-1"><input {...f('date_paid')} type="date" className="apple-input w-full" /></div>
       <div className="col-span-1 flex items-center gap-1">
         <button onClick={onSave} className="btn-primary text-xs px-2.5 py-1.5">Save</button>

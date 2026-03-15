@@ -1,12 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase.js'
 
-const fmt = n => n == null ? '' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+const fmt = n => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0 })
 const num = v => v === '' || v == null ? null : parseFloat(String(v).replace(/[$,]/g, '')) || 0
 
 export default function BudgetTab() {
-  const [items, setItems] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [items, setItems]       = useState([])
+  const [loading, setLoading]   = useState(true)
   const [editingId, setEditingId] = useState(null)
   const [editFields, setEditFields] = useState({})
 
@@ -26,8 +26,7 @@ export default function BudgetTab() {
   }
 
   async function toggleLock(item) {
-    const newStatus = item.status === 'locked' ? 'pending' : 'locked'
-    await updateItem(item.id, { status: newStatus })
+    await updateItem(item.id, { status: item.status === 'locked' ? 'pending' : 'locked' })
   }
 
   async function deleteItem(id) {
@@ -46,204 +45,180 @@ export default function BudgetTab() {
 
   function startEdit(item) {
     setEditingId(item.id)
-    setEditFields({ name: item.name, code: item.code || '', estimated_cost: item.estimated_cost || '', actual_cost: item.actual_cost || '', vendor: item.vendor || '', date_paid: item.date_paid || '', notes: item.notes || '' })
+    setEditFields({
+      name: item.name, code: item.code || '',
+      estimated_cost: item.estimated_cost ?? '',
+      actual_cost: item.actual_cost ?? '',
+      vendor: item.vendor || '', date_paid: item.date_paid || '', notes: item.notes || ''
+    })
   }
 
   async function saveEdit(id) {
-    const patch = {
-      name: editFields.name,
-      code: editFields.code,
+    await updateItem(id, {
+      name: editFields.name, code: editFields.code,
       estimated_cost: num(editFields.estimated_cost),
       actual_cost: editFields.actual_cost !== '' ? num(editFields.actual_cost) : null,
       vendor: editFields.vendor,
       date_paid: editFields.date_paid || null,
       notes: editFields.notes,
-    }
-    await updateItem(id, patch)
+    })
     setEditingId(null)
   }
 
   const softItems = items.filter(i => i.section === 'soft')
   const hardItems = items.filter(i => i.section === 'hard')
+  const totalEst  = items.reduce((s, i) => s + (i.estimated_cost || 0), 0)
+  const locked    = items.filter(i => i.status === 'locked')
+  const lockedAmt = locked.reduce((s, i) => s + (i.actual_cost ?? i.estimated_cost ?? 0), 0)
+  const pending   = items.filter(i => i.status !== 'locked').reduce((s, i) => s + (i.estimated_cost || 0), 0)
+  const overages  = items.filter(i => i.actual_cost != null && i.actual_cost > (i.estimated_cost || 0))
+  const pct       = totalEst > 0 ? Math.round((lockedAmt / totalEst) * 100) : 0
 
-  const totalEst = items.reduce((s, i) => s + (i.estimated_cost || 0), 0)
-  const totalAct = items.reduce((s, i) => s + (i.actual_cost || 0), 0)
-  const lockedEst = items.filter(i => i.status === 'locked').reduce((s, i) => s + (i.actual_cost || i.estimated_cost || 0), 0)
-  const pendingEst = items.filter(i => i.status !== 'locked').reduce((s, i) => s + (i.estimated_cost || 0), 0)
-  const overages = items.filter(i => i.actual_cost != null && i.actual_cost > (i.estimated_cost || 0))
-  const pctLocked = totalEst > 0 ? Math.round((lockedEst / totalEst) * 100) : 0
-
-  if (loading) return <div className="text-center py-20 text-gray-400">Loading budget…</div>
+  if (loading) return <Spinner />
 
   return (
     <div>
-      {/* Dashboard */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      {/* ── Dashboard cards ── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         {[
-          { label: 'Total Budget', value: fmt(totalEst), color: 'blue' },
-          { label: 'Locked In', value: fmt(lockedEst), sub: `${pctLocked}% committed`, color: 'green' },
-          { label: 'Pending Bids', value: fmt(pendingEst), color: 'yellow' },
-          { label: 'Overages', value: overages.length, sub: overages.length ? `${overages.map(o=>o.name).slice(0,2).join(', ')}…` : 'None 🎉', color: overages.length ? 'red' : 'gray' },
-        ].map(({ label, value, sub, color }) => (
-          <div key={label} className={`bg-white rounded-lg shadow p-4 border-l-4 border-${color}-500`}>
-            <div className="text-xs text-gray-500 font-medium uppercase tracking-wide">{label}</div>
-            <div className={`text-2xl font-bold text-${color}-700 mt-1`}>{value}</div>
-            {sub && <div className="text-xs text-gray-400 mt-0.5">{sub}</div>}
+          { label: 'Total Budget',  value: fmt(totalEst),    sub: 'estimated',         accent: '#0a84ff' },
+          { label: 'Locked In',     value: fmt(lockedAmt),   sub: `${pct}% committed`, accent: '#30d158' },
+          { label: 'Pending Bids',  value: fmt(pending),     sub: `${items.filter(i=>i.status!=='locked').length} items`, accent: '#ff9f0a' },
+          { label: 'Over Budget',   value: overages.length,  sub: overages.length ? overages.slice(0,1).map(o=>o.name).join('') + (overages.length > 1 ? ` +${overages.length-1}` : '') : 'All clear', accent: overages.length ? '#ff453a' : '#30d158' },
+        ].map(({ label, value, sub, accent }) => (
+          <div key={label} className="apple-card p-4" style={{ borderLeft: `3px solid ${accent}` }}>
+            <div className="text-lbl2 text-xs font-medium uppercase tracking-wider mb-1">{label}</div>
+            <div className="text-lbl font-bold text-2xl leading-tight" style={{ color: accent }}>{value}</div>
+            <div className="text-lbl3 text-xs mt-0.5">{sub}</div>
           </div>
         ))}
       </div>
 
-      {/* Legend */}
-      <div className="flex gap-4 mb-3 text-xs text-gray-500">
-        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-green-100 border border-green-300 inline-block"></span>Locked bid</span>
-        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-white border border-gray-200 inline-block"></span>Pending</span>
-        <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-sm bg-red-100 border border-red-300 inline-block"></span>Over budget</span>
-        <span className="ml-auto text-gray-400 italic">Click any row to edit · Click lock icon to mark bid as confirmed</span>
+      {/* ── Legend ── */}
+      <div className="flex flex-wrap gap-4 mb-3 text-xs text-lbl3">
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: 'rgba(48,209,88,0.25)', border: '1px solid rgba(48,209,88,0.4)' }}/>
+          Locked bid
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: 'rgba(255,69,58,0.2)', border: '1px solid rgba(255,69,58,0.4)' }}/>
+          Over budget
+        </span>
+        <span className="ml-auto italic" style={{ color: '#3a3a3c' }}>Tap any row to edit</span>
       </div>
 
-      {/* Soft Costs */}
-      <Section
-        title="B.  ALLOWABLE SOFT COSTS"
-        items={softItems}
-        editingId={editingId}
-        editFields={editFields}
-        setEditFields={setEditFields}
-        onEdit={startEdit}
-        onSave={saveEdit}
-        onCancel={() => setEditingId(null)}
-        onToggleLock={toggleLock}
-        onDelete={deleteItem}
-        onAdd={() => addItem('soft')}
-      />
+      <Section title="B · SOFT COSTS" items={softItems} editingId={editingId} editFields={editFields}
+        setEditFields={setEditFields} onEdit={startEdit} onSave={saveEdit} onCancel={() => setEditingId(null)}
+        onToggleLock={toggleLock} onDelete={deleteItem} onAdd={() => addItem('soft')} />
 
       <div className="mb-4" />
 
-      {/* Hard Costs */}
-      <Section
-        title="C.  HARD COSTS"
-        items={hardItems}
-        editingId={editingId}
-        editFields={editFields}
-        setEditFields={setEditFields}
-        onEdit={startEdit}
-        onSave={saveEdit}
-        onCancel={() => setEditingId(null)}
-        onToggleLock={toggleLock}
-        onDelete={deleteItem}
-        onAdd={() => addItem('hard')}
-      />
+      <Section title="C · HARD COSTS" items={hardItems} editingId={editingId} editFields={editFields}
+        setEditFields={setEditFields} onEdit={startEdit} onSave={saveEdit} onCancel={() => setEditingId(null)}
+        onToggleLock={toggleLock} onDelete={deleteItem} onAdd={() => addItem('hard')} />
     </div>
   )
 }
 
 function Section({ title, items, editingId, editFields, setEditFields, onEdit, onSave, onCancel, onToggleLock, onDelete, onAdd }) {
-  const sectionEst = items.reduce((s, i) => s + (i.estimated_cost || 0), 0)
-  const sectionAct = items.reduce((s, i) => s + (i.actual_cost || 0), 0)
+  const sEst = items.reduce((s, i) => s + (i.estimated_cost || 0), 0)
+  const sAct = items.reduce((s, i) => s + (i.actual_cost || 0), 0)
 
   return (
-    <div className="bg-white rounded-lg shadow overflow-hidden">
+    <div className="apple-card overflow-hidden">
       {/* Section header */}
-      <div className="bg-blue-900 text-white px-4 py-2.5 flex items-center justify-between">
-        <span className="font-bold text-sm tracking-wide">{title}</span>
-        <span className="text-blue-200 text-sm">
-          Est: <strong className="text-white">{fmt(sectionEst)}</strong>
-          {sectionAct > 0 && <> · Actual: <strong className="text-white">{fmt(sectionAct)}</strong></>}
+      <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid rgba(84,84,88,0.4)', background: '#2c2c2e' }}>
+        <span className="font-semibold text-lbl tracking-wide text-sm">{title}</span>
+        <span className="text-lbl2 text-xs">
+          Est <span className="text-lbl font-semibold">{fmt(sEst)}</span>
+          {sAct > 0 && <> · Actual <span className="text-pos font-semibold">{fmt(sAct)}</span></>}
         </span>
       </div>
 
       {/* Column headers */}
-      <div className="grid grid-cols-12 bg-gray-50 border-b border-gray-200 px-2 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+      <div className="grid grid-cols-12 px-4 py-2 text-xs font-semibold uppercase tracking-widest"
+        style={{ color: '#636366', borderBottom: '1px solid rgba(84,84,88,0.3)' }}>
         <div className="col-span-1">Code</div>
         <div className="col-span-3">Description</div>
         <div className="col-span-2 text-right">Estimated</div>
         <div className="col-span-2 text-right">Bid / Actual</div>
         <div className="col-span-2">Vendor</div>
         <div className="col-span-1">Date Paid</div>
-        <div className="col-span-1 text-center">Actions</div>
+        <div className="col-span-1 text-center">Lock</div>
       </div>
 
       {/* Rows */}
       {items.map(item => {
-        const isEditing = editingId === item.id
-        const isLocked = item.status === 'locked'
-        const isOver = item.actual_cost != null && item.actual_cost > (item.estimated_cost || 0)
-        const rowClass = isOver ? 'row-overage' : isLocked ? 'row-locked' : 'row-pending'
-
-        if (isEditing) {
-          return (
-            <EditRow
-              key={item.id}
-              fields={editFields}
-              setFields={setEditFields}
-              onSave={() => onSave(item.id)}
-              onCancel={onCancel}
-            />
-          )
+        if (editingId === item.id) {
+          return <EditRow key={item.id} fields={editFields} setFields={setEditFields}
+            onSave={() => onSave(item.id)} onCancel={onCancel} onDelete={() => onDelete(item.id)} />
         }
-
+        const isLocked = item.status === 'locked'
+        const isOver   = item.actual_cost != null && item.actual_cost > (item.estimated_cost || 0)
         return (
           <div
             key={item.id}
-            className={`grid grid-cols-12 px-2 py-2 border-b border-gray-100 text-sm hover:opacity-90 cursor-pointer ${rowClass}`}
             onClick={() => onEdit(item)}
+            className={`grid grid-cols-12 px-4 py-2.5 cursor-pointer transition-colors text-sm ${isOver ? 'row-overage' : isLocked ? 'row-locked' : 'row-pending'}`}
+            style={{ borderBottom: '1px solid rgba(84,84,88,0.2)' }}
           >
-            <div className="col-span-1 text-gray-400 text-xs font-mono">{item.code || ''}</div>
-            <div className="col-span-3 font-medium text-gray-800 truncate">{item.name}</div>
-            <div className="col-span-2 text-right text-gray-700">{fmt(item.estimated_cost)}</div>
-            <div className={`col-span-2 text-right font-semibold ${isOver ? 'text-red-600' : isLocked ? 'text-green-700' : 'text-gray-400'}`}>
+            <div className="col-span-1 font-mono text-xs" style={{ color: '#636366' }}>{item.code || ''}</div>
+            <div className="col-span-3 font-medium text-lbl truncate">{item.name}</div>
+            <div className="col-span-2 text-right text-lbl2">{fmt(item.estimated_cost)}</div>
+            <div className={`col-span-2 text-right font-semibold ${isOver ? 'text-neg' : isLocked ? 'text-pos' : 'text-lbl3'}`}>
               {item.actual_cost != null ? fmt(item.actual_cost) : '—'}
               {isOver && <span className="ml-1 text-xs">▲</span>}
             </div>
-            <div className="col-span-2 text-gray-500 text-xs truncate">{item.vendor || ''}</div>
-            <div className="col-span-1 text-gray-400 text-xs">{item.date_paid ? new Date(item.date_paid).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}</div>
-            <div className="col-span-1 flex items-center justify-center gap-1" onClick={e => e.stopPropagation()}>
+            <div className="col-span-2 text-xs text-lbl2 truncate">{item.vendor || ''}</div>
+            <div className="col-span-1 text-xs text-lbl3">
+              {item.date_paid ? new Date(item.date_paid).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
+            </div>
+            <div className="col-span-1 flex justify-center" onClick={e => e.stopPropagation()}>
               <button
-                title={isLocked ? 'Unlock bid' : 'Mark as locked bid'}
                 onClick={() => onToggleLock(item)}
-                className={`text-xs px-1.5 py-0.5 rounded ${isLocked ? 'bg-green-600 text-white' : 'bg-gray-200 text-gray-500 hover:bg-green-100'}`}
+                className="text-base px-1 transition-transform hover:scale-110"
+                title={isLocked ? 'Unlock' : 'Lock as confirmed bid'}
               >
                 {isLocked ? '🔒' : '🔓'}
               </button>
-              <button
-                title="Delete"
-                onClick={() => onDelete(item.id)}
-                className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-red-400 hover:bg-red-50"
-              >✕</button>
             </div>
           </div>
         )
       })}
 
       {/* Add row */}
-      <div className="px-3 py-2 bg-gray-50 border-t border-gray-100">
-        <button
-          onClick={onAdd}
-          className="text-xs text-blue-600 hover:text-blue-800 font-medium"
-        >+ Add line item</button>
+      <div className="px-4 py-2.5" style={{ borderTop: '1px solid rgba(84,84,88,0.2)' }}>
+        <button onClick={onAdd} className="text-xs font-semibold" style={{ color: '#0a84ff' }}>
+          + Add line item
+        </button>
       </div>
     </div>
   )
 }
 
-function EditRow({ fields, setFields, onSave, onCancel }) {
-  const f = (key) => ({
+function EditRow({ fields, setFields, onSave, onCancel, onDelete }) {
+  const f = key => ({
     value: fields[key] ?? '',
     onChange: e => setFields(p => ({ ...p, [key]: e.target.value })),
-    className: 'w-full px-1 py-0.5 border border-blue-300 rounded text-sm bg-blue-50 focus:outline-none focus:border-blue-500',
+    className: 'apple-input w-full',
   })
-
   return (
-    <div className="grid grid-cols-12 px-2 py-2 border-b border-blue-200 bg-blue-50 gap-1 text-sm">
+    <div className="grid grid-cols-12 px-4 py-3 gap-1.5 text-sm"
+      style={{ background: 'rgba(10,132,255,0.07)', borderBottom: '1px solid rgba(10,132,255,0.3)' }}>
       <div className="col-span-1"><input {...f('code')} placeholder="Code" /></div>
       <div className="col-span-3"><input {...f('name')} placeholder="Description" /></div>
-      <div className="col-span-2"><input {...f('estimated_cost')} placeholder="Estimated $" /></div>
+      <div className="col-span-2"><input {...f('estimated_cost')} placeholder="Est. $" /></div>
       <div className="col-span-2"><input {...f('actual_cost')} placeholder="Bid / Actual $" /></div>
       <div className="col-span-2"><input {...f('vendor')} placeholder="Vendor" /></div>
-      <div className="col-span-1"><input {...f('date_paid')} type="date" /></div>
-      <div className="col-span-1 flex gap-1 items-center">
-        <button onClick={onSave} className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700">Save</button>
-        <button onClick={onCancel} className="text-xs bg-gray-200 text-gray-600 px-1.5 py-1 rounded hover:bg-gray-300">✕</button>
+      <div className="col-span-1"><input {...f('date_paid')} type="date" className="apple-input w-full" /></div>
+      <div className="col-span-1 flex items-center gap-1">
+        <button onClick={onSave} className="btn-primary text-xs px-2.5 py-1.5">Save</button>
+        <button onClick={onCancel} className="btn-secondary text-xs px-2 py-1.5">✕</button>
       </div>
     </div>
   )
+}
+
+function Spinner() {
+  return <div className="text-center py-24 text-lbl3 text-sm">Loading…</div>
 }

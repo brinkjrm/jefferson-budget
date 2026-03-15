@@ -95,7 +95,7 @@ FOR ALL TO anon USING (bucket_id = 'invoices') WITH CHECK (bucket_id = 'invoices
 -- 4. DEFAULT SETTINGS ────────────────────────────────────────
 INSERT INTO settings (key, value) VALUES
   ('bank_name',         'FirstBank'),
-  ('borrower',          'Josh & Cortney Meyer'),
+  ('borrower',          'Josh Meyer'),
   ('property_address',  '3120 Jefferson St, Boulder CO 80304'),
   ('builder',           'Marc David Homes'),
   ('loan_amount',       ''),

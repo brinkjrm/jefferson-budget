@@ -5,13 +5,18 @@ import PrepaidTab from './components/PrepaidTab.jsx'
 import DrawsTab from './components/DrawsTab.jsx'
 import SettingsTab from './components/SettingsTab.jsx'
 
-const TABS = ['Budget', 'Prepaid Items', 'Draw Sheets', 'Settings']
+const TABS = [
+  { id: 'Budget',        label: 'Budget',       icon: '◻' },
+  { id: 'Prepaid Items', label: 'Prepaid',       icon: '✓' },
+  { id: 'Draw Sheets',   label: 'Draw Sheets',   icon: '⬡' },
+  { id: 'Settings',      label: 'Settings',      icon: '⚙' },
+]
 
 export default function App() {
   const [tab, setTab] = useState('Budget')
   const [settings, setSettings] = useState({
     bank_name: 'FirstBank',
-    borrower: 'Josh & Cortney Meyer',
+    borrower: 'Josh Meyer',
     property_address: '3120 Jefferson St, Boulder CO 80304',
     builder: 'Marc David Homes',
     loan_amount: '',
@@ -19,10 +24,7 @@ export default function App() {
   })
   const [dbOk, setDbOk] = useState(null)
 
-  useEffect(() => {
-    loadSettings()
-    checkConnection()
-  }, [])
+  useEffect(() => { loadSettings(); checkConnection() }, [])
 
   async function checkConnection() {
     const { error } = await supabase.from('line_items').select('id').limit(1)
@@ -31,7 +33,7 @@ export default function App() {
 
   async function loadSettings() {
     const { data } = await supabase.from('settings').select('*')
-    if (data && data.length) {
+    if (data?.length) {
       const s = {}
       data.forEach(r => { s[r.key] = r.value })
       setSettings(prev => ({ ...prev, ...s }))
@@ -45,39 +47,49 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      {/* Top bar */}
-      <header className="bg-blue-900 text-white shadow-lg">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-bold tracking-tight">3120 Jefferson St · Budget Manager</h1>
-            <p className="text-blue-300 text-xs">Boulder CO 80304</p>
+    <div className="min-h-screen" style={{ background: '#000' }}>
+
+      {/* ── Top navigation bar ── */}
+      <header className="glass sticky top-0 z-50 border-b" style={{ borderColor: 'rgba(84,84,88,0.4)' }}>
+        <div className="max-w-6xl mx-auto px-5">
+          {/* Title row */}
+          <div className="flex items-center justify-between py-3">
+            <div>
+              <h1 className="text-lbl font-bold tracking-tight" style={{ fontSize: 17 }}>
+                3120 Jefferson St
+              </h1>
+              <p className="text-lbl2 text-xs tracking-wide">Budget Manager</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span
+                className="w-1.5 h-1.5 rounded-full"
+                style={{ background: dbOk === null ? '#ffd60a' : dbOk ? '#30d158' : '#ff453a' }}
+              />
+              <span className="text-lbl3 text-xs">
+                {dbOk === null ? 'Connecting' : dbOk ? 'Live' : 'Offline'}
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className={`inline-block w-2 h-2 rounded-full ${dbOk === null ? 'bg-yellow-400' : dbOk ? 'bg-green-400' : 'bg-red-400'}`}></span>
-            <span className="text-xs text-blue-200">{dbOk === null ? 'Connecting…' : dbOk ? 'Connected' : 'DB Error — check console'}</span>
-          </div>
+
+          {/* Tab bar */}
+          <nav className="flex gap-1 pb-2">
+            {TABS.map(t => (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={`px-4 py-1.5 text-sm font-medium rounded-apple transition-all ${
+                  tab === t.id ? 'tab-active' : 'text-lbl2 hover:text-lbl'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
         </div>
-        {/* Tabs */}
-        <nav className="max-w-7xl mx-auto px-4 flex gap-1 pb-0">
-          {TABS.map(t => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`px-5 py-2 text-sm font-medium rounded-t transition-colors ${
-                tab === t
-                  ? 'bg-gray-100 text-blue-900'
-                  : 'text-blue-200 hover:text-white hover:bg-blue-800'
-              }`}
-            >
-              {t}
-            </button>
-          ))}
-        </nav>
       </header>
 
-      {/* Content */}
-      <main className="max-w-7xl mx-auto px-4 py-6">
+      {/* ── Content ── */}
+      <main className="max-w-6xl mx-auto px-5 py-6">
         {tab === 'Budget'        && <BudgetTab settings={settings} />}
         {tab === 'Prepaid Items' && <PrepaidTab />}
         {tab === 'Draw Sheets'   && <DrawsTab settings={settings} />}

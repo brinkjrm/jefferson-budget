@@ -49,7 +49,8 @@ export default function BudgetTab() {
       name: item.name, code: item.code || '',
       estimated_cost: item.estimated_cost ?? '',
       actual_cost: item.actual_cost ?? '',
-      vendor: item.vendor || '', date_paid: item.date_paid || '', notes: item.notes || ''
+      vendor: item.vendor || '', notes: item.notes || '',
+      payments: item.payments || [],
     })
   }
 
@@ -59,8 +60,8 @@ export default function BudgetTab() {
       estimated_cost: num(editFields.estimated_cost),
       actual_cost: editFields.actual_cost !== '' ? num(editFields.actual_cost) : null,
       vendor: editFields.vendor,
-      date_paid: editFields.date_paid || null,
       notes: editFields.notes,
+      payments: editFields.payments,
     })
     setEditingId(null)
   }
@@ -144,7 +145,7 @@ function Section({ title, items, editingId, editFields, setEditFields, onEdit, o
         <div className="col-span-2 text-right">Bid / Actual</div>
         <div className="col-span-1">Vendor</div>
         <div className="col-span-2">Notes</div>
-        <div className="col-span-1">Date Paid</div>
+        <div className="col-span-1">Payments</div>
         <div className="col-span-1 text-center">Lock</div>
       </div>
 
@@ -156,6 +157,12 @@ function Section({ title, items, editingId, editFields, setEditFields, onEdit, o
         }
         const isLocked = item.status === 'locked'
         const isOver   = item.actual_cost != null && item.actual_cost > (item.estimated_cost || 0)
+        const pmts     = item.payments || []
+        const pmtTotal = pmts.reduce((s, p) => s + (num(p.amount) || 0), 0)
+        const pmtLabel = pmts.length === 0 ? '' :
+          pmts.length === 1
+            ? (pmts[0].date ? new Date(pmts[0].date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : fmt(pmtTotal))
+            : `${pmts.length} pmts`
         return (
           <div
             key={item.id}
@@ -173,7 +180,9 @@ function Section({ title, items, editingId, editFields, setEditFields, onEdit, o
             <div className="col-span-1 text-xs text-lbl2 truncate">{item.vendor || ''}</div>
             <div className="col-span-2 text-xs text-lbl2 truncate" title={item.notes || ''}>{item.notes || ''}</div>
             <div className="col-span-1 text-xs text-lbl3">
-              {item.date_paid ? new Date(item.date_paid).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''}
+              {pmtLabel && (
+                <span title={pmts.length > 1 ? fmt(pmtTotal) : undefined}>{pmtLabel}</span>
+              )}
             </div>
             <div className="col-span-1 flex justify-center" onClick={e => e.stopPropagation()}>
               <button
@@ -204,28 +213,89 @@ function EditRow({ fields, setFields, onSave, onCancel, onDelete }) {
     onChange: e => setFields(p => ({ ...p, [key]: e.target.value })),
     className: 'apple-input w-full',
   })
+
+  const payments = fields.payments || []
+
+  function addPayment() {
+    setFields(p => ({ ...p, payments: [...(p.payments || []), { date: '', amount: '' }] }))
+  }
+
+  function updatePayment(i, key, val) {
+    setFields(p => {
+      const pmts = [...(p.payments || [])]
+      pmts[i] = { ...pmts[i], [key]: val }
+      return { ...p, payments: pmts }
+    })
+  }
+
+  function removePayment(i) {
+    setFields(p => ({ ...p, payments: (p.payments || []).filter((_, idx) => idx !== i) }))
+  }
+
   return (
-    <div className="grid grid-cols-12 px-4 py-3 gap-1.5 text-sm"
+    <div className="px-4 py-3 text-sm"
       style={{ background: 'rgba(10,132,255,0.07)', borderBottom: '1px solid rgba(10,132,255,0.3)' }}>
-      <div className="col-span-1"><input {...f('code')} placeholder="Code" /></div>
-      <div className="col-span-2"><input {...f('name')} placeholder="Description" /></div>
-      <div className="col-span-2"><input {...f('estimated_cost')} placeholder="Est. $" /></div>
-      <div className="col-span-2"><input {...f('actual_cost')} placeholder="Bid / Actual $" /></div>
-      <div className="col-span-1"><input {...f('vendor')} placeholder="Vendor" /></div>
-      <div className="col-span-2 relative">
-        <input {...f('notes')} placeholder="Notes" />
-        {fields.notes && (
-          <button
-            onClick={() => setFields(p => ({ ...p, notes: '' }))}
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-lbl3 hover:text-neg text-xs leading-none"
-            title="Clear note"
-          >✕</button>
-        )}
+
+      {/* Main fields */}
+      <div className="grid grid-cols-12 gap-1.5 mb-2">
+        <div className="col-span-1"><input {...f('code')} placeholder="Code" /></div>
+        <div className="col-span-2"><input {...f('name')} placeholder="Description" /></div>
+        <div className="col-span-2"><input {...f('estimated_cost')} placeholder="Est. $" /></div>
+        <div className="col-span-2"><input {...f('actual_cost')} placeholder="Bid / Actual $" /></div>
+        <div className="col-span-1"><input {...f('vendor')} placeholder="Vendor" /></div>
+        <div className="col-span-2 relative">
+          <input {...f('notes')} placeholder="Notes" />
+          {fields.notes && (
+            <button
+              onClick={() => setFields(p => ({ ...p, notes: '' }))}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-lbl3 hover:text-neg text-xs leading-none"
+              title="Clear note"
+            >✕</button>
+          )}
+        </div>
+        <div className="col-span-2 flex items-center gap-1">
+          <button onClick={onSave} className="btn-primary text-xs px-2.5 py-1.5">Save</button>
+          <button onClick={onCancel} className="btn-secondary text-xs px-2 py-1.5">✕</button>
+          <button onClick={onDelete} className="text-xs px-1 py-1.5 hover:opacity-70" style={{ color: '#ff453a' }} title="Delete line item">🗑</button>
+        </div>
       </div>
-      <div className="col-span-1"><input {...f('date_paid')} type="date" className="apple-input w-full" /></div>
-      <div className="col-span-1 flex items-center gap-1">
-        <button onClick={onSave} className="btn-primary text-xs px-2.5 py-1.5">Save</button>
-        <button onClick={onCancel} className="btn-secondary text-xs px-2 py-1.5">✕</button>
+
+      {/* Payments sub-section */}
+      <div className="pt-2" style={{ borderTop: '1px solid rgba(10,132,255,0.2)' }}>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#636366' }}>Payments</span>
+          <button onClick={addPayment} className="text-xs font-semibold" style={{ color: '#0a84ff' }}>+ Add</button>
+        </div>
+        {payments.length === 0 ? (
+          <div className="text-xs text-lbl3 italic">No payments recorded</div>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {payments.map((p, i) => (
+              <div key={i} className="flex items-center gap-1.5 rounded px-2 py-1.5" style={{ background: 'rgba(84,84,88,0.25)' }}>
+                <input
+                  type="date"
+                  value={p.date || ''}
+                  onChange={e => updatePayment(i, 'date', e.target.value)}
+                  className="apple-input text-xs"
+                  style={{ width: '130px' }}
+                />
+                <input
+                  type="text"
+                  value={p.amount || ''}
+                  placeholder="Amount $"
+                  onChange={e => updatePayment(i, 'amount', e.target.value)}
+                  className="apple-input text-xs"
+                  style={{ width: '90px' }}
+                />
+                <button
+                  onClick={() => removePayment(i)}
+                  className="text-lbl3 hover:text-neg text-xs leading-none"
+                  title="Remove payment"
+                >✕</button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

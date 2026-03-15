@@ -83,7 +83,7 @@ export default function BudgetTab() {
         {[
           { label: 'Total Budget',  value: fmt(totalEst),    sub: 'estimated',         accent: '#0a84ff' },
           { label: 'Locked In',     value: fmt(lockedAmt),   sub: `${pct}% committed`, accent: '#30d158' },
-          { label: 'Pending Bids',  value: fmt(pending),     sub: `${items.filter(i=>i.status!=='locked').length} items`, accent: '#ff9f0a' },
+          { label: 'Pending Bids',  value: fmt(pending),     sub: `${items.filter(i=>i.status!=='locked').length} items`, accent: '#ffd60a' },
           { label: 'Over Budget',   value: overages.length,  sub: overages.length ? overages.slice(0,1).map(o=>o.name).join('') + (overages.length > 1 ? ` +${overages.length-1}` : '') : 'All clear', accent: overages.length ? '#ff453a' : '#30d158' },
         ].map(({ label, value, sub, accent }) => (
           <div key={label} className="apple-card p-4" style={{ borderLeft: `3px solid ${accent}` }}>

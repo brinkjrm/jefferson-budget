@@ -19,9 +19,10 @@ const PHASE_COLORS = ['#0a84ff','#30d158','#ff9f0a','#bf5af2','#32ade6','#ff6b6b
 
 // ── House build template ──────────────────────────────────────────────────────
 const HOUSE_TEMPLATE = [
-  { name: 'Pre-Construction',       color: '#5e5ce6', duration: 28, tasks: ['Permits & approvals', 'Site survey', 'Final plan review', 'Utility locates', 'Builder contract finalized'] },
-  { name: 'Site Work',              color: '#32ade6', duration: 10, tasks: ['Clearing & grubbing', 'Rough grading', 'Erosion control install'] },
-  { name: 'Crawlspace Foundation',  color: '#ff9f0a', duration: 14, tasks: ['Layout & excavation', 'Footing pour', 'Foundation walls / piers', 'Waterproofing & drainage', 'Crawlspace insulation', 'Backfill & rough grade'] },
+  { name: 'Pre-Construction',        color: '#5e5ce6', duration: 28, tasks: ['Permits & approvals', 'Site survey', 'Final plan review', 'Utility locates', 'Builder contract finalized'] },
+  { name: 'Demolition & Abatement', color: '#ff453a', duration: 14, tasks: ['Asbestos testing', 'Asbestos abatement', 'Lead paint testing & abatement', 'Hazmat removal & disposal', 'Interior demolition', 'Structural demolition', 'Debris removal & haul-off'] },
+  { name: 'Site Work & Excavation',  color: '#32ade6', duration: 14, tasks: ['Clearing & grubbing', 'Rough grading', 'Excavation', 'Erosion control install'] },
+  { name: 'Crawlspace Foundation',   color: '#ff9f0a', duration: 14, tasks: ['Layout & footing excavation', 'Footing pour', 'Foundation walls / piers', 'Waterproofing & drainage', 'Crawlspace insulation', 'Backfill & rough grade'] },
   { name: 'Framing',                color: '#0a84ff', duration: 21, tasks: ['Floor system (beams, joists, subfloor)', 'Exterior wall framing', 'Interior wall framing', 'Roof framing', 'Roof & wall sheathing', 'Windows & exterior doors (rough)'] },
   { name: 'Roofing',                color: '#ff453a', duration: 7,  tasks: ['Underlayment & ice/water shield', 'Roofing installation', 'Gutters & downspouts'] },
   { name: 'Exterior',               color: '#30d158', duration: 21, tasks: ['House wrap / WRB', 'Siding installation', 'Exterior trim', 'Exterior paint / stain'] },
@@ -311,7 +312,7 @@ export default function ScheduleTab() {
           {/* Header */}
           <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 20, height: HDR_H, background: '#1c1c1e', borderBottom: '1px solid rgba(84,84,88,0.4)' }}>
             <div style={{ width: LIST_W, minWidth: LIST_W, position: 'sticky', left: 0, zIndex: 30, background: '#1c1c1e', display: 'flex', alignItems: 'flex-end', padding: '0 16px 10px', borderRight: '1px solid rgba(84,84,88,0.3)' }}>
-              <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#636366' }}>Task</span>
+              <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#636366' }}>Phases & Tasks</span>
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', height: 26 }}>
@@ -388,6 +389,15 @@ export default function ScheduleTab() {
                     </span>
 
                     <span style={{ color: STATUS_MAP[task.status]?.color || '#8E8E93', fontSize: 9, flexShrink: 0 }}>●</span>
+
+                    {/* + task button on phase rows — visible on hover */}
+                    {isPhase && (
+                      <button
+                        onClick={e => { e.stopPropagation(); addTask(task.id) }}
+                        style={{ fontSize: 10, fontWeight: 700, color: '#0a84ff', flexShrink: 0, opacity: hoveredId === task.id ? 1 : 0, transition: 'opacity 0.15s', lineHeight: 1, marginRight: 2 }}
+                        title="Add task to this phase"
+                      >+</button>
+                    )}
 
                     {/* Delete button — visible on hover */}
                     <button

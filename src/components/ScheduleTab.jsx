@@ -268,7 +268,7 @@ export default function ScheduleTab() {
                 if (!task.start_date || !task.end_date) return null
                 const left  = barLeft(task.start_date)
                 const width = barWidth(task.start_date, task.end_date)
-                const barH  = isPhase ? 10 : 20
+                const barH  = isPhase ? 30 : 20
                 const color = STATUS_MAP[task.status]?.color || phaseColor
                 const top   = i * ROW_H + (ROW_H - barH) / 2
 

@@ -500,6 +500,20 @@ export default function ScheduleTab() {
           onCancel={() => setEditingId(null)}
           onDelete={() => deleteTask(editingId)}
           onAddTask={() => addTask(editingId)}
+          onCreateTask={async name => {
+            const today = toStr(new Date())
+            const end   = toStr(addDays(new Date(), 6))
+            const phases = tasksRef.current.filter(t => !t.parent_id)
+            const maxOrder = phases.reduce((m, t) => Math.max(m, t.sort_order||0), 0)
+            const color = PHASE_COLORS[phases.length % PHASE_COLORS.length]
+            const { data } = await supabase.from('schedule_tasks')
+              .insert({ name, start_date: today, end_date: end, status: 'not_started', sort_order: maxOrder + 1, color, depends_on: [] })
+              .select().single()
+            if (data) {
+              setTasks(prev => [...prev, data])
+              setEditFields(p => ({ ...p, depends_on: [...(p.depends_on||[]), data.id] }))
+            }
+          }}
         />
       )}
     </div>
@@ -542,12 +556,19 @@ function DependencyArrows({ tasks, flatList, tlStart, bodyH, timelineW, dayW }) 
 }
 
 // ── Edit modal ────────────────────────────────────────────────────────────────
-function EditModal({ task, fields, setFields, allTasks, isPhase, onSave, onCancel, onDelete, onAddTask }) {
+function EditModal({ task, fields, setFields, allTasks, isPhase, onSave, onCancel, onDelete, onAddTask, onCreateTask }) {
+  const [depFilter, setDepFilter] = useState('')
   const set = key => e => setFields(p => ({ ...p, [key]: e.target.value }))
   const toggleDep = (id, checked) => setFields(p => ({
     ...p,
     depends_on: checked ? [...(p.depends_on||[]), id] : (p.depends_on||[]).filter(x => x !== id)
   }))
+
+  const sorted = [...allTasks].sort((a, b) => a.name.localeCompare(b.name))
+  const filterLower = depFilter.trim().toLowerCase()
+  const filtered = filterLower ? sorted.filter(t => t.name.toLowerCase().includes(filterLower)) : sorted
+  const exactMatch = sorted.some(t => t.name.toLowerCase() === filterLower)
+  const canCreate = filterLower.length > 0 && !exactMatch
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', pointerEvents: 'none' }}>
@@ -579,17 +600,37 @@ function EditModal({ task, fields, setFields, allTasks, isPhase, onSave, onCance
           {allTasks.length === 0 ? (
             <span style={{ fontSize: 12, color: '#636366', fontStyle: 'italic' }}>No other tasks yet</span>
           ) : (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {allTasks.map(t => {
-                const checked = (fields.depends_on||[]).includes(t.id)
-                return (
-                  <label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12, color: checked ? '#0a84ff' : '#ebebf5', background: checked ? 'rgba(10,132,255,0.15)' : 'rgba(84,84,88,0.2)', borderRadius: 6, padding: '4px 8px' }}>
-                    <input type="checkbox" checked={checked} onChange={e => toggleDep(t.id, e.target.checked)} style={{ accentColor: '#0a84ff' }} />
-                    {t.name}
-                  </label>
-                )
-              })}
-            </div>
+            <>
+              <input
+                value={depFilter}
+                onChange={e => setDepFilter(e.target.value)}
+                className="apple-input text-xs"
+                style={{ width: '100%', marginBottom: 8 }}
+                placeholder="Filter dependencies…"
+              />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, maxHeight: 160, overflowY: 'auto' }}>
+                {filtered.map(t => {
+                  const checked = (fields.depends_on||[]).includes(t.id)
+                  return (
+                    <label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12, color: checked ? '#0a84ff' : '#ebebf5', background: checked ? 'rgba(10,132,255,0.15)' : 'rgba(84,84,88,0.2)', borderRadius: 6, padding: '4px 8px' }}>
+                      <input type="checkbox" checked={checked} onChange={e => toggleDep(t.id, e.target.checked)} style={{ accentColor: '#0a84ff' }} />
+                      {t.name}
+                    </label>
+                  )
+                })}
+                {filtered.length === 0 && !canCreate && (
+                  <span style={{ fontSize: 12, color: '#636366', fontStyle: 'italic' }}>No matches</span>
+                )}
+                {canCreate && (
+                  <button
+                    onClick={() => { onCreateTask(depFilter.trim()); setDepFilter('') }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12, color: '#30d158', background: 'rgba(48,209,88,0.12)', border: '1px dashed rgba(48,209,88,0.4)', borderRadius: 6, padding: '4px 8px' }}
+                  >
+                    + Create &ldquo;{depFilter.trim()}&rdquo;
+                  </button>
+                )}
+              </div>
+            </>
           )}
         </div>
       </div>

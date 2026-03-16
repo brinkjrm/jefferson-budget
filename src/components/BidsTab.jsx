@@ -87,14 +87,18 @@ export default function BidsTab() {
   }
 
   // ── iCloud email poll ───────────────────────────────────────────────────────
-  async function pollEmail() {
+  async function pollEmail(lookbackDays = 90) {
     setPolling(true)
     try {
-      const res = await fetch('/api/poll-email', { method: 'POST' })
+      const res = await fetch('/api/poll-email', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ lookbackDays }),
+      })
       const { count, error } = await res.json()
       if (error) throw new Error(error)
       if (count > 0) { await loadAll(); showToast(`Found ${count} new bid${count > 1 ? 's' : ''} in iCloud!`) }
-      else showToast('No new bid emails found')
+      else showToast(`No new bid emails in the last ${lookbackDays} days`)
     } catch (err) {
       showToast('Email poll failed: ' + err.message, 'error')
     } finally {
@@ -233,9 +237,31 @@ export default function BidsTab() {
       <div className="apple-card p-4 mb-5">
         <div className="flex items-center gap-3 mb-3">
           <span className="text-white font-semibold text-sm">Import a Bid</span>
-          <button onClick={pollEmail} disabled={polling} className="btn-secondary text-xs px-3 py-1.5 ml-auto">
-            {polling ? 'Checking…' : '📧 Check iCloud Email'}
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <select
+              id="lookback"
+              defaultValue="90"
+              className="apple-input text-xs"
+              style={{ width: 110 }}
+              disabled={polling}
+            >
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="180">Last 6 months</option>
+              <option value="365">Last year</option>
+            </select>
+            <button
+              onClick={() => {
+                const days = parseInt(document.getElementById('lookback').value)
+                pollEmail(days)
+              }}
+              disabled={polling}
+              className="btn-secondary text-xs px-3 py-1.5"
+            >
+              {polling ? 'Checking…' : '📧 Check iCloud Email'}
+            </button>
+          </div>
         </div>
         <div
           onDragOver={e => { e.preventDefault(); setDragging(true) }}

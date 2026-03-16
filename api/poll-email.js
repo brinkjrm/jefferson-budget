@@ -48,11 +48,18 @@ export default async function handler(req, res) {
     await client.connect()
     await client.mailboxOpen('INBOX')
 
-    // Fetch last 100 unseen messages to check for bids
+    // Search for emails since the requested lookback (default 90 days)
+    const lookbackDays = parseInt(req.body?.lookbackDays) || 90
+    const since = new Date()
+    since.setDate(since.getDate() - lookbackDays)
+
+    const uids = await client.search({ since }, { uid: true })
     const messages = []
-    for await (const msg of client.fetch('1:*', { envelope: true, source: true }, { uid: false })) {
-      messages.push(msg)
-      if (messages.length >= 100) break
+    if (uids.length > 0) {
+      for await (const msg of client.fetch(uids, { envelope: true, source: true }, { uid: true })) {
+        messages.push(msg)
+        if (messages.length >= 200) break
+      }
     }
 
     for (const msg of messages) {

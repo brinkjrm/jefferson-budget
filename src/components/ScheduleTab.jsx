@@ -130,7 +130,7 @@ export default function ScheduleTab() {
     if (!target) return
 
     if (isPhase) {
-      // Only allow dropping on another phase slot
+      // Reorder phases among top-level phases
       const allPhases = tasksRef.current.filter(t => !t.parent_id).sort((a,b) => (a.sort_order||0)-(b.sort_order||0))
       const targetPhaseId = target.isPhase ? target.task.id : target.task.parent_id
       const fromIdx = allPhases.findIndex(p => p.id === taskId)
@@ -140,14 +140,23 @@ export default function ScheduleTab() {
       const [removed] = reordered.splice(fromIdx, 1)
       reordered.splice(toIdx, 0, removed)
       await Promise.all(reordered.map((p, i) => updateTask(p.id, { sort_order: i + 1 })))
+    } else if (target.isPhase) {
+      // Nest task as last child of the target phase
+      const newParentId = target.task.id
+      const siblings = tasksRef.current.filter(t => t.parent_id === newParentId)
+      const newOrder = siblings.reduce((m, t) => Math.max(m, t.sort_order||0), 0) + 1
+      await updateTask(taskId, { parent_id: newParentId, sort_order: newOrder })
+    } else if (target.task.parent_id !== parentId) {
+      // Move task to a different phase (drop on a sibling in another phase)
+      const newParentId = target.task.parent_id
+      const siblings = tasksRef.current.filter(t => t.parent_id === newParentId)
+      const newOrder = siblings.reduce((m, t) => Math.max(m, t.sort_order||0), 0) + 1
+      await updateTask(taskId, { parent_id: newParentId, sort_order: newOrder })
     } else {
-      // Only allow dropping within same parent
-      if (target.task.parent_id !== parentId && target.task.id !== parentId) return
+      // Reorder within same parent
       const siblings = tasksRef.current.filter(t => t.parent_id === parentId).sort((a,b) => (a.sort_order||0)-(b.sort_order||0))
-      const targetTask = target.task.parent_id === parentId ? target.task : null
-      if (!targetTask) return
       const fromIdx = siblings.findIndex(t => t.id === taskId)
-      const toIdx   = siblings.findIndex(t => t.id === targetTask.id)
+      const toIdx   = siblings.findIndex(t => t.id === target.task.id)
       if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return
       const reordered = [...siblings]
       const [removed] = reordered.splice(fromIdx, 1)
@@ -296,7 +305,7 @@ export default function ScheduleTab() {
         >
           {loadingTpl ? 'Loading…' : '🏠 Load House Template'}
         </button>
-        <span className="text-lbl3 text-xs hidden md:inline">Drag ⠿ to reorder · Click row to edit · Drag bar to move · Drag right edge to resize</span>
+        <span className="text-lbl3 text-xs hidden md:inline">Drag ⠿ to reorder · Drop task onto a phase to nest it · Click row to edit · Drag bar to move</span>
         <div className="ml-auto flex items-center gap-1">
           <span className="text-lbl3 text-xs mr-1">Zoom</span>
           <button onClick={() => setZoomIdx(i => Math.max(0, i-1))} disabled={zoomIdx===0} className="btn-secondary text-xs px-2 py-1">−</button>
@@ -341,8 +350,11 @@ export default function ScheduleTab() {
             {/* Task list */}
             <div style={{ width: LIST_W, minWidth: LIST_W, position: 'sticky', left: 0, zIndex: 10, background: '#1c1c1e', borderRight: '1px solid rgba(84,84,88,0.3)' }}>
               {flatList.map(({ task, depth, isPhase, phaseColor }, fi) => {
-                const isReorderTarget = reorder && reorder.targetFlatIdx === fi && reorder.taskId !== task.id
                 const isDraggingThis  = reorder?.taskId === task.id
+                // Nest indicator: a task being dragged onto a phase row
+                const isNestTarget    = reorder && !reorder.isPhase && isPhase && reorder.targetFlatIdx === fi && reorder.taskId !== task.id
+                // Reorder indicator: normal position insert (not a nest)
+                const isReorderTarget = reorder && reorder.targetFlatIdx === fi && reorder.taskId !== task.id && !isNestTarget
                 return (
                   <div
                     key={task.id}
@@ -352,9 +364,13 @@ export default function ScheduleTab() {
                       height: ROW_H,
                       display: 'flex', alignItems: 'center',
                       padding: `0 6px 0 ${8 + depth * 20}px`,
-                      borderBottom: '1px solid rgba(84,84,88,0.2)',
+                      borderBottom: isNestTarget ? '2px solid #0a84ff' : '1px solid rgba(84,84,88,0.2)',
                       borderTop: isReorderTarget ? '2px solid #0a84ff' : undefined,
-                      background: editingId === task.id ? 'rgba(10,132,255,0.1)' : isDraggingThis ? 'rgba(10,132,255,0.06)' : 'transparent',
+                      background: isNestTarget
+                        ? 'rgba(10,132,255,0.12)'
+                        : editingId === task.id
+                          ? 'rgba(10,132,255,0.1)'
+                          : isDraggingThis ? 'rgba(10,132,255,0.06)' : 'transparent',
                       cursor: 'pointer', gap: 3,
                       opacity: isDraggingThis ? 0.5 : 1,
                     }}

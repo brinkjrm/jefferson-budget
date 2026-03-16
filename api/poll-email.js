@@ -1,24 +1,19 @@
 // Vercel serverless function — /api/poll-email
-// Polls iCloud IMAP for contractor bid emails, extracts structured data via Claude,
-// and saves new bids to Supabase. Deduplicates by email Message-ID.
+// Polls iCloud IMAP for contractor bid emails using server-side keyword search,
+// extracts structured data via Claude, and saves new bids to Supabase.
 //
 // Required env vars:
 //   ICLOUD_EMAIL         — your iCloud email address
 //   ICLOUD_APP_PASSWORD  — App-Specific Password from appleid.apple.com
 //   ANTHROPIC_API_KEY    — for bid extraction
-//   SUPABASE_URL         — Supabase project URL
-//   SUPABASE_SERVICE_KEY — Supabase service role key (for server-side inserts)
+//   SUPABASE_SERVICE_KEY — Supabase service role key
+
+// Vercel: allow up to 300s on Pro, 60s on Hobby
+export const config = { maxDuration: 300 }
 
 import { ImapFlow } from 'imapflow'
 import { simpleParser } from 'mailparser'
 import { createClient } from '@supabase/supabase-js'
-
-const BID_KEYWORDS = ['bid', 'quote', 'estimate', 'proposal', 'price', 'pricing']
-
-function hasBidKeyword(subject = '', body = '') {
-  const text = (subject + ' ' + body).toLowerCase()
-  return BID_KEYWORDS.some(kw => text.includes(kw))
-}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
@@ -32,9 +27,12 @@ export default async function handler(req, res) {
   if (!email || !password) return res.status(500).json({ error: 'ICLOUD_EMAIL / ICLOUD_APP_PASSWORD not configured' })
   if (!sbKey)              return res.status(500).json({ error: 'SUPABASE_SERVICE_KEY not configured' })
 
-  const supabase = createClient(sbUrl, sbKey)
-  const newBids  = []
-  const errors   = []
+  const supabase     = createClient(sbUrl, sbKey)
+  const newBids      = []
+  const errors       = []
+  const lookbackDays = parseInt(req.body?.lookbackDays) || 90
+  const since        = new Date()
+  since.setDate(since.getDate() - lookbackDays)
 
   const client = new ImapFlow({
     host: 'imap.mail.me.com',
@@ -48,63 +46,64 @@ export default async function handler(req, res) {
     await client.connect()
     await client.mailboxOpen('INBOX')
 
-    // Search for emails since the requested lookback (default 90 days)
-    const lookbackDays = parseInt(req.body?.lookbackDays) || 90
-    const since = new Date()
-    since.setDate(since.getDate() - lookbackDays)
+    // Server-side IMAP search: only emails since date AND matching any bid keyword in subject
+    // This runs on Apple's mail server — only matching emails are downloaded
+    const keywordSearches = ['bid', 'quote', 'estimate', 'proposal'].map(kw => ({ subject: kw }))
+    const orSearch = keywordSearches.reduce((acc, cur) =>
+      acc ? { or: [acc, cur] } : cur
+    )
 
-    const uids = await client.search({ since }, { uid: true })
+    const uids = await client.search({ and: [{ since }, orSearch] }, { uid: true })
+
+    if (uids.length === 0) {
+      await client.logout()
+      return res.json({ newBids: [], count: 0, errors, searched: 0 })
+    }
+
+    // Cap at 50 emails per run to stay within timeout
+    const uidSlice = uids.slice(-50)
+
     const messages = []
-    if (uids.length > 0) {
-      for await (const msg of client.fetch(uids, { envelope: true, source: true }, { uid: true })) {
-        messages.push(msg)
-        if (messages.length >= 200) break
-      }
+    for await (const msg of client.fetch(uidSlice, { envelope: true, source: true }, { uid: true })) {
+      messages.push(msg)
     }
 
     for (const msg of messages) {
       try {
-        const parsed = await simpleParser(msg.source)
+        const parsed   = await simpleParser(msg.source)
         const subject  = parsed.subject || ''
         const fromAddr = parsed.from?.text || ''
         const bodyText = parsed.text || parsed.html?.replace(/<[^>]+>/g, ' ') || ''
         const msgId    = parsed.messageId || null
         const date     = parsed.date ? parsed.date.toISOString() : null
 
-        if (!hasBidKeyword(subject, bodyText)) continue
-
-        // Dedup check
+        // Dedup: skip if already imported
         if (msgId) {
           const { data: existing } = await supabase
             .from('bids').select('id').eq('email_message_id', msgId).maybeSingle()
           if (existing) continue
         }
 
-        // Find PDF attachment if any
+        // Extract bid data via Claude
         let extractedBid = null
         const pdfAttachment = parsed.attachments?.find(a => a.contentType === 'application/pdf')
+        const baseUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : 'http://localhost:3000'
 
         if (pdfAttachment && apiKey) {
           const base64 = pdfAttachment.content.toString('base64')
-          const extractRes = await fetch(`${process.env.VERCEL_URL ? 'https://' + process.env.VERCEL_URL : 'http://localhost:3000'}/api/extract-bid`, {
+          const r = await fetch(`${baseUrl}/api/extract-bid`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ pdf: base64 }),
           })
-          if (extractRes.ok) {
-            const { bid } = await extractRes.json()
-            extractedBid = bid
-          }
+          if (r.ok) extractedBid = (await r.json()).bid
         } else if (apiKey) {
-          const extractRes = await fetch(`${process.env.VERCEL_URL ? 'https://' + process.env.VERCEL_URL : 'http://localhost:3000'}/api/extract-bid`, {
+          const r = await fetch(`${baseUrl}/api/extract-bid`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ emailBody: bodyText.slice(0, 8000), emailFrom: fromAddr, emailSubject: subject }),
           })
-          if (extractRes.ok) {
-            const { bid } = await extractRes.json()
-            extractedBid = bid
-          }
+          if (r.ok) extractedBid = (await r.json()).bid
         }
 
         // Upsert contractor
@@ -112,35 +111,29 @@ export default async function handler(req, res) {
         if (extractedBid?.contractorName) {
           const contractorData = {
             name:    extractedBid.contractorName,
-            company: extractedBid.company  || null,
-            email:   extractedBid.email    || fromAddr.match(/<(.+)>/)?.[1] || fromAddr,
-            phone:   extractedBid.phone    || null,
-            trade:   extractedBid.trade    || null,
+            company: extractedBid.company || null,
+            email:   extractedBid.email   || fromAddr.match(/<(.+)>/)?.[1] || fromAddr,
+            phone:   extractedBid.phone   || null,
+            trade:   extractedBid.trade   || null,
           }
-          // Try to match existing contractor by email
           const matchEmail = contractorData.email
           if (matchEmail) {
-            const { data: existing } = await supabase
-              .from('contractors').select('id').eq('email', matchEmail).maybeSingle()
-            if (existing) {
-              contractorId = existing.id
-            } else {
-              const { data: newC } = await supabase.from('contractors').insert(contractorData).select('id').single()
-              if (newC) contractorId = newC.id
-            }
+            const { data: existing } = await supabase.from('contractors').select('id').eq('email', matchEmail).maybeSingle()
+            if (existing) contractorId = existing.id
+            else { const { data: c } = await supabase.from('contractors').insert(contractorData).select('id').single(); if (c) contractorId = c.id }
           } else {
-            const { data: newC } = await supabase.from('contractors').insert(contractorData).select('id').single()
-            if (newC) contractorId = newC.id
+            const { data: c } = await supabase.from('contractors').insert(contractorData).select('id').single()
+            if (c) contractorId = c.id
           }
         }
 
         // Insert bid
-        const bidRecord = {
+        const { data: savedBid } = await supabase.from('bids').insert({
           contractor_id:    contractorId,
-          trade:            extractedBid?.trade        || null,
+          trade:            extractedBid?.trade       || null,
           description:      subject,
-          total_amount:     extractedBid?.totalAmount   || null,
-          line_items:       extractedBid?.lineItems     || [],
+          total_amount:     extractedBid?.totalAmount  || null,
+          line_items:       extractedBid?.lineItems    || [],
           source:           'email',
           email_subject:    subject,
           email_from:       fromAddr,
@@ -148,9 +141,7 @@ export default async function handler(req, res) {
           email_message_id: msgId,
           status:           'pending',
           notes:            extractedBid?.notes || null,
-        }
-
-        const { data: savedBid } = await supabase.from('bids').insert(bidRecord).select().single()
+        }).select().single()
         if (savedBid) newBids.push(savedBid)
 
       } catch (msgErr) {
@@ -164,5 +155,5 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: err.message })
   }
 
-  res.json({ newBids, count: newBids.length, errors })
+  res.json({ newBids, count: newBids.length, errors, searched: newBids.length + errors.length })
 }

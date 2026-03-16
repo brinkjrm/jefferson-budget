@@ -46,7 +46,22 @@ export default async function handler(req, res) {
     await client.connect()
     await client.mailboxOpen('INBOX')
 
-    const BID_SUBJECT_KEYWORDS = ['bid', 'quote', 'estimate', 'proposal', 'pricing', 'price', 'cost', 'contract', 'scope', 'labor', 'materials']
+    // Construction-specific terms — generic words like "price" / "cost" / "contract" are intentionally
+    // excluded because they match too many non-construction emails (insurance, utilities, finance, etc.)
+    const BID_SUBJECT_KEYWORDS = [
+      'bid', 'quote', 'estimate', 'proposal',
+      'framing', 'roofing', 'electrical', 'plumbing', 'hvac', 'drywall',
+      'flooring', 'painting', 'tile', 'concrete', 'foundation', 'excavation',
+      'landscaping', 'demolition', 'siding', 'cabinets', 'insulation',
+      'contractor', 'subcontractor', 'construction', 'scope of work', 'lumber',
+    ]
+    const CONSTRUCTION_BODY_KEYWORDS = [
+      'bid', 'quote', 'estimate', 'proposal', 'framing', 'roofing', 'electrical',
+      'plumbing', 'hvac', 'drywall', 'flooring', 'painting', 'tile', 'concrete',
+      'foundation', 'excavation', 'landscaping', 'demolition', 'siding', 'cabinets',
+      'insulation', 'contractor', 'subcontract', 'construction', 'scope of work',
+      'lumber', 'labor and materials', 'materials and labor', 'per square foot',
+    ]
 
     // Step 1: fetch lightweight metadata for all emails in date range (no body download)
     const uidResult = await client.search({ since }, { uid: true })
@@ -99,6 +114,12 @@ export default async function handler(req, res) {
         const bodyText = parsed.text || parsed.html?.replace(/<[^>]+>/g, ' ') || ''
         const msgId    = parsed.messageId || null
         const date     = parsed.date ? parsed.date.toISOString() : null
+
+        // Skip emails with no construction relevance in subject OR body
+        const subjectLower = subject.toLowerCase()
+        const bodyLower    = bodyText.slice(0, 4000).toLowerCase()
+        const isConstruction = CONSTRUCTION_BODY_KEYWORDS.some(kw => subjectLower.includes(kw) || bodyLower.includes(kw))
+        if (!isConstruction && !pdfAttachment) continue
 
         // Dedup: skip if already imported
         if (msgId) {

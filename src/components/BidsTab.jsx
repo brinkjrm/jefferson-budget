@@ -177,9 +177,28 @@ export default function BidsTab() {
     setAcceptModal({ bid, budgetMatches, schedMatches, selectedBudget: budgetMatches[0]?.id || null, selectedSched: schedMatches.map(t => t.id) })
   }
 
-  async function confirmAccept(modal) {
+  async function dismissBid(bid) {
+    await supabase.from('bids').update({ status: 'rejected' }).eq('id', bid.id)
+    setBids(prev => prev.map(b => b.id === bid.id ? { ...b, status: 'rejected' } : b))
+    showToast('Bid dismissed')
+  }
+
+  async function confirmAccept(modal, cFields) {
     const { bid, selectedBudget, selectedSched } = modal
-    const contractor = bid.contractors || contractors.find(c => c.id === bid.contractor_id)
+    let contractor = bid.contractors || contractors.find(c => c.id === bid.contractor_id)
+
+    // Update contractor details with any edits made in the modal
+    if (contractor?.id && cFields) {
+      const updates = {}
+      if (cFields.name)    updates.name    = cFields.name
+      if (cFields.company) updates.company = cFields.company
+      if (cFields.email)   updates.email   = cFields.email
+      if (cFields.phone)   updates.phone   = cFields.phone
+      if (Object.keys(updates).length) {
+        await supabase.from('contractors').update(updates).eq('id', contractor.id)
+        contractor = { ...contractor, ...updates }
+      }
+    }
 
     // 1. Accept this bid, reject others in the same trade
     await supabase.from('bids').update({ status: 'accepted', budget_line_item_id: selectedBudget || null, schedule_task_ids: selectedSched || [] }).eq('id', bid.id)
@@ -323,7 +342,7 @@ export default function BidsTab() {
                 </div>
                 {isOpen && (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12, padding: 12 }}>
-                    {tradeBids.map(bid => <BidCard key={bid.id} bid={bid} expanded={expandedBid === bid.id} onExpand={() => setExpandedBid(p => p === bid.id ? null : bid.id)} onAccept={() => startAccept(bid)} onContractor={() => setContractorDrawer(bid.contractors || contractors.find(c => c.id === bid.contractor_id))} />)}
+                    {tradeBids.map(bid => <BidCard key={bid.id} bid={bid} expanded={expandedBid === bid.id} onExpand={() => setExpandedBid(p => p === bid.id ? null : bid.id)} onAccept={() => startAccept(bid)} onDismiss={() => dismissBid(bid)} onContractor={() => setContractorDrawer(bid.contractors || contractors.find(c => c.id === bid.contractor_id))} />)}
                   </div>
                 )}
               </div>
@@ -398,7 +417,7 @@ export default function BidsTab() {
 }
 
 // ── Bid card ──────────────────────────────────────────────────────────────────
-function BidCard({ bid, expanded, onExpand, onAccept, onContractor }) {
+function BidCard({ bid, expanded, onExpand, onAccept, onDismiss, onContractor }) {
   const st  = STATUS_COLORS[bid.status] || STATUS_COLORS.pending
   const contractor = bid.contractors
   const lineItems  = bid.line_items || []
@@ -454,9 +473,14 @@ function BidCard({ bid, expanded, onExpand, onAccept, onContractor }) {
           <button onClick={onContractor} style={{ flex: 1, padding: '8px 4px', fontSize: 11, color: '#8e8e93', background: 'transparent', textAlign: 'center' }}>Contact</button>
         )}
         {bid.status === 'pending' && (
-          <button onClick={onAccept} style={{ flex: 1, padding: '8px 4px', fontSize: 11, fontWeight: 700, color: '#30d158', background: 'rgba(48,209,88,0.1)', textAlign: 'center' }}>
-            Accept
-          </button>
+          <>
+            <button onClick={onDismiss} style={{ flex: 1, padding: '8px 4px', fontSize: 11, fontWeight: 700, color: '#ff453a', background: 'rgba(255,69,58,0.1)', textAlign: 'center' }}>
+              Dismiss
+            </button>
+            <button onClick={onAccept} style={{ flex: 1, padding: '8px 4px', fontSize: 11, fontWeight: 700, color: '#30d158', background: 'rgba(48,209,88,0.1)', textAlign: 'center' }}>
+              Accept
+            </button>
+          </>
         )}
       </div>
     </div>
@@ -534,23 +558,49 @@ function ReviewModal({ extracted, onSave, onCancel }) {
 
 // ── Accept confirmation modal ─────────────────────────────────────────────────
 function AcceptModal({ modal, setModal, budgetItems, schedTasks, onConfirm, onCancel }) {
+  const contractor = modal.bid.contractors
+  const [cFields, setCFields] = useState({
+    name:    contractor?.name    || '',
+    company: contractor?.company || '',
+    email:   contractor?.email   || modal.bid.email_from?.match(/<(.+)>/)?.[1] || modal.bid.email_from || '',
+    phone:   contractor?.phone   || '',
+  })
+  const [schedFilter, setSchedFilter] = useState('')
+
+  const sorted = [...schedTasks].sort((a, b) => a.name.localeCompare(b.name))
+  const filterLower = schedFilter.trim().toLowerCase()
+  const filtered = filterLower ? sorted.filter(t => t.name.toLowerCase().includes(filterLower)) : sorted
+
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-      <div style={{ width: '100%', maxWidth: 600, background: '#1c1c1e', borderRadius: '16px 16px 0 0', padding: 24, boxShadow: '0 -8px 40px rgba(0,0,0,0.6)' }}>
+      <div style={{ width: '100%', maxWidth: 600, background: '#1c1c1e', borderRadius: '16px 16px 0 0', padding: 24, boxShadow: '0 -8px 40px rgba(0,0,0,0.6)', maxHeight: '85vh', overflowY: 'auto' }}>
         <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
           <span style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#636366' }}>Accept Bid</span>
           <div style={{ flex: 1 }} />
           <button onClick={onCancel} className="btn-secondary text-xs px-2 py-1.5 mr-2">Cancel</button>
-          <button onClick={() => onConfirm(modal)} className="btn-primary text-xs px-3 py-1.5">Confirm Accept</button>
+          <button onClick={() => onConfirm(modal, cFields)} className="btn-primary text-xs px-3 py-1.5">Confirm Accept</button>
         </div>
 
+        {/* Bid summary */}
         <div style={{ marginBottom: 16, padding: '12px 14px', background: 'rgba(48,209,88,0.08)', borderRadius: 10, border: '1px solid rgba(48,209,88,0.25)' }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#fff' }}>
-            {modal.bid.contractors?.company || modal.bid.contractors?.name || 'Contractor'} — {fmt(modal.bid.total_amount)}
-          </div>
-          <div style={{ fontSize: 11, color: '#636366', marginTop: 2 }}>{modal.bid.trade}</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: '#30d158' }}>{fmt(modal.bid.total_amount)}</div>
+          <div style={{ fontSize: 12, color: '#8e8e93', marginTop: 2 }}>{modal.bid.trade}</div>
         </div>
 
+        {/* Contractor details */}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 11, color: '#636366', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Contractor Details</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            {[['Name', 'name'], ['Company', 'company'], ['Email', 'email'], ['Phone', 'phone']].map(([label, key]) => (
+              <div key={key}>
+                <label style={{ fontSize: 10, color: '#636366', display: 'block', marginBottom: 3 }}>{label}</label>
+                <input value={cFields[key]} onChange={e => setCFields(p => ({ ...p, [key]: e.target.value }))} className="apple-input text-xs w-full" placeholder={label} />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Budget link */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: '#636366', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Link to Budget Line Item</div>
           <select value={modal.selectedBudget || ''} onChange={e => setModal(p => ({ ...p, selectedBudget: e.target.value || null }))} className="apple-input text-sm w-full">
@@ -562,10 +612,18 @@ function AcceptModal({ modal, setModal, budgetItems, schedTasks, onConfirm, onCa
           {modal.selectedBudget && <div style={{ fontSize: 11, color: '#30d158', marginTop: 4 }}>✓ Will set actual cost to {fmt(modal.bid.total_amount)} and lock the row</div>}
         </div>
 
+        {/* Schedule tasks */}
         <div>
           <div style={{ fontSize: 11, color: '#636366', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Link to Schedule Tasks</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {schedTasks.filter(t => !t.parent_id ? true : true).slice(0, 30).map(t => {
+          <input
+            value={schedFilter}
+            onChange={e => setSchedFilter(e.target.value)}
+            className="apple-input text-xs w-full"
+            style={{ marginBottom: 8 }}
+            placeholder="Filter tasks…"
+          />
+          <div style={{ maxHeight: 200, overflowY: 'auto', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {filtered.map(t => {
               const checked = modal.selectedSched?.includes(t.id)
               return (
                 <label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12, color: checked ? '#0a84ff' : '#ebebf5', background: checked ? 'rgba(10,132,255,0.15)' : 'rgba(84,84,88,0.2)', borderRadius: 6, padding: '4px 8px' }}>
@@ -574,6 +632,9 @@ function AcceptModal({ modal, setModal, budgetItems, schedTasks, onConfirm, onCa
                 </label>
               )
             })}
+            {filtered.length === 0 && filterLower && (
+              <div style={{ fontSize: 12, color: '#636366', fontStyle: 'italic' }}>No tasks match "{schedFilter}"</div>
+            )}
           </div>
         </div>
       </div>

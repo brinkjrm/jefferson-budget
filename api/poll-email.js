@@ -53,14 +53,15 @@ export default async function handler(req, res) {
       acc ? { or: [acc, cur] } : cur
     )
 
-    const uids = await client.search({ and: [{ since }, orSearch] }, { uid: true })
+    const uidResult = await client.search({ and: [{ since }, orSearch] }, { uid: true })
+    const uids = Array.from(uidResult || [])
 
     if (uids.length === 0) {
       await client.logout()
       return res.json({ newBids: [], count: 0, errors, searched: 0 })
     }
 
-    // Cap at 50 emails per run to stay within timeout
+    // Cap at 50 most recent emails per run to stay within timeout
     const uidSlice = uids.slice(-50)
 
     const messages = []

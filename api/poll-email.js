@@ -26,11 +26,11 @@ export default async function handler(req, res) {
   const email    = process.env.ICLOUD_EMAIL
   const password = process.env.ICLOUD_APP_PASSWORD
   const apiKey   = process.env.ANTHROPIC_API_KEY
-  const sbUrl    = process.env.SUPABASE_URL    || process.env.VITE_SUPABASE_URL
+  const sbUrl    = 'https://qxffadumpshyaseayndy.supabase.co'
   const sbKey    = process.env.SUPABASE_SERVICE_KEY
 
   if (!email || !password) return res.status(500).json({ error: 'ICLOUD_EMAIL / ICLOUD_APP_PASSWORD not configured' })
-  if (!sbUrl || !sbKey)    return res.status(500).json({ error: 'SUPABASE_URL / SUPABASE_SERVICE_KEY not configured' })
+  if (!sbKey)              return res.status(500).json({ error: 'SUPABASE_SERVICE_KEY not configured' })
 
   const supabase = createClient(sbUrl, sbKey)
   const newBids  = []

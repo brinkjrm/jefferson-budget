@@ -46,26 +46,48 @@ export default async function handler(req, res) {
     await client.connect()
     await client.mailboxOpen('INBOX')
 
-    // Server-side IMAP search: only emails since date AND matching any bid keyword in subject
-    // This runs on Apple's mail server — only matching emails are downloaded
-    const keywordSearches = ['bid', 'quote', 'estimate', 'proposal'].map(kw => ({ subject: kw }))
-    const orSearch = keywordSearches.reduce((acc, cur) =>
-      acc ? { or: [acc, cur] } : cur
-    )
+    const BID_SUBJECT_KEYWORDS = ['bid', 'quote', 'estimate', 'proposal', 'pricing', 'price', 'cost', 'contract', 'scope', 'labor', 'materials']
 
-    const uidResult = await client.search({ and: [{ since }, orSearch] }, { uid: true })
-    const uids = Array.from(uidResult || [])
+    // Step 1: fetch lightweight metadata for all emails in date range (no body download)
+    const uidResult = await client.search({ since }, { uid: true })
+    const allUids = Array.from(uidResult || []).slice(-200) // last 200 in range
 
-    if (uids.length === 0) {
+    if (allUids.length === 0) {
       await client.logout()
       return res.json({ newBids: [], count: 0, errors, searched: 0 })
     }
 
-    // Cap at 50 most recent emails per run to stay within timeout
-    const uidSlice = uids.slice(-50)
+    // Step 2: fetch envelope + body structure (headers only, very fast)
+    const metaMap = {}
+    for await (const msg of client.fetch(allUids, { envelope: true, bodyStructure: true }, { uid: true })) {
+      metaMap[msg.uid] = msg
+    }
 
+    // Step 3: filter — keep emails that have a PDF attachment OR a bid keyword in subject
+    function hasPdfAttachment(structure) {
+      if (!structure) return false
+      if (structure.type === 'application' && structure.subtype === 'pdf') return true
+      if (Array.isArray(structure.childNodes)) return structure.childNodes.some(hasPdfAttachment)
+      return false
+    }
+
+    const relevantUids = allUids.filter(uid => {
+      const msg = metaMap[uid]
+      if (!msg) return false
+      const subject = msg.envelope?.subject?.toLowerCase() || ''
+      const hasKeyword = BID_SUBJECT_KEYWORDS.some(kw => subject.includes(kw))
+      const hasPdf = hasPdfAttachment(msg.bodyStructure)
+      return hasKeyword || hasPdf
+    }).slice(-50) // cap at 50 full downloads per run
+
+    if (relevantUids.length === 0) {
+      await client.logout()
+      return res.json({ newBids: [], count: 0, errors, searched: 0 })
+    }
+
+    // Step 4: fetch full source only for relevant emails
     const messages = []
-    for await (const msg of client.fetch(uidSlice, { envelope: true, source: true }, { uid: true })) {
+    for await (const msg of client.fetch(relevantUids, { envelope: true, source: true }, { uid: true })) {
       messages.push(msg)
     }
 

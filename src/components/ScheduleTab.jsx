@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
 
-const WEEK_W = 48        // px per week column
 const ROW_H  = 40        // px per task row
-const DAY_W  = WEEK_W / 7
 const HDR_H  = 52        // header height (month row + week row)
 const LIST_W = 280       // task list column width
+
+const ZOOM_LEVELS = [24, 32, 48, 64, 96]  // px per week at each zoom level
+const ZOOM_DEFAULT = 2                     // index into ZOOM_LEVELS (48px)
 
 const STATUS_MAP = {
   not_started: { label: 'Not Started', color: '#636366' },
@@ -24,7 +25,7 @@ const diffDays = (a,b) => Math.round((b-a)/86400000)
 const weekStart= d => { const r=new Date(d); r.setDate(r.getDate()-r.getDay()); r.setHours(0,0,0,0); return r }
 const fmtDate  = s => s ? parse(s).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : ''
 
-function getMonthGroups(weeks) {
+function getMonthGroups(weeks, weekW) {
   const groups = []
   let cur = null
   weeks.forEach((w, i) => {
@@ -43,6 +44,13 @@ export default function ScheduleTab() {
   const [editingId, setEditingId] = useState(null)
   const [editFields,setEditFields]= useState({})
   const [drag,      setDrag]      = useState(null)
+  const [zoomIdx,   setZoomIdx]   = useState(ZOOM_DEFAULT)
+
+  const weekW  = ZOOM_LEVELS[zoomIdx]
+  const dayW   = weekW / 7
+  const dayWRef = useRef(dayW)
+  useEffect(() => { dayWRef.current = dayW }, [dayW])
+
   const tasksRef = useRef(tasks)
   useEffect(() => { tasksRef.current = tasks }, [tasks])
 
@@ -52,7 +60,7 @@ export default function ScheduleTab() {
   useEffect(() => {
     if (!drag) return
     const onMove = e => {
-      const days = Math.round((e.clientX - drag.startX) / DAY_W)
+      const days = Math.round((e.clientX - drag.startX) / dayWRef.current)
       if (drag.type === 'resize') {
         const newEnd = toStr(addDays(parse(drag.origEnd), days))
         if (newEnd >= drag.origStart)
@@ -150,10 +158,12 @@ export default function ScheduleTab() {
     }
   })
 
-  // ── Timeline range ────────────────────────────────────────────────────────
+  // ── Timeline range (always extends to at least Feb of next year) ──────────
   const allDates = tasks.flatMap(t => [t.start_date, t.end_date].filter(Boolean).map(parse))
   const minDate  = allDates.length ? new Date(Math.min(...allDates)) : new Date()
-  const maxDate  = allDates.length ? new Date(Math.max(...allDates)) : addDays(new Date(), 84)
+  const taskMax  = allDates.length ? new Date(Math.max(...allDates)) : new Date()
+  const nextFeb  = new Date(new Date().getFullYear() + 1, 1, 28)  // Feb 28 next year
+  const maxDate  = new Date(Math.max(taskMax, nextFeb))
   const tlStart  = weekStart(addDays(minDate, -14))
   const tlEnd    = weekStart(addDays(maxDate,  28))
 
@@ -161,11 +171,11 @@ export default function ScheduleTab() {
   let w = new Date(tlStart)
   while (w <= tlEnd) { weeks.push(new Date(w)); w = addDays(w, 7) }
 
-  const timelineW = weeks.length * WEEK_W
+  const timelineW = weeks.length * weekW
   const bodyH     = flatList.length * ROW_H
 
-  const barLeft  = s => !s ? 0 : diffDays(tlStart, parse(s)) * DAY_W
-  const barWidth = (s,e) => (!s||!e) ? WEEK_W : Math.max((diffDays(parse(s),parse(e))+1)*DAY_W, 6)
+  const barLeft  = s => !s ? 0 : diffDays(tlStart, parse(s)) * dayW
+  const barWidth = (s,e) => (!s||!e) ? weekW : Math.max((diffDays(parse(s),parse(e))+1)*dayW, 6)
 
   if (loading) return <div className="text-center py-24 text-lbl3 text-sm">Loading…</div>
 
@@ -177,6 +187,22 @@ export default function ScheduleTab() {
       <div className="flex items-center gap-3 mb-4">
         <button onClick={addPhase} className="btn-primary text-xs px-3 py-1.5">+ Add Phase</button>
         <span className="text-lbl3 text-xs">Click a row to edit · Drag bar to move · Drag right edge to resize</span>
+        <div className="ml-auto flex items-center gap-1">
+          <span className="text-lbl3 text-xs mr-1">Zoom</span>
+          <button
+            onClick={() => setZoomIdx(i => Math.max(0, i - 1))}
+            disabled={zoomIdx === 0}
+            className="btn-secondary text-xs px-2 py-1"
+            title="Zoom out"
+          >−</button>
+          <span className="text-lbl3 text-xs w-8 text-center">{weekW}px</span>
+          <button
+            onClick={() => setZoomIdx(i => Math.min(ZOOM_LEVELS.length - 1, i + 1))}
+            disabled={zoomIdx === ZOOM_LEVELS.length - 1}
+            className="btn-secondary text-xs px-2 py-1"
+            title="Zoom in"
+          >+</button>
+        </div>
       </div>
 
       {/* Gantt */}
@@ -193,8 +219,8 @@ export default function ScheduleTab() {
             <div style={{ position: 'relative', flex: 1 }}>
               {/* Month row */}
               <div style={{ display: 'flex', height: 26 }}>
-                {getMonthGroups(weeks).map(({ label, start, count }) => (
-                  <div key={start} style={{ width: count * WEEK_W, flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 8, borderRight: '1px solid rgba(84,84,88,0.25)', fontSize: 11, fontWeight: 600, color: '#ebebf5', overflow: 'hidden' }}>
+                {getMonthGroups(weeks, weekW).map(({ label, start, count }) => (
+                  <div key={start} style={{ width: count * weekW, flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 8, borderRight: '1px solid rgba(84,84,88,0.25)', fontSize: 11, fontWeight: 600, color: '#ebebf5', overflow: 'hidden' }}>
                     {label}
                   </div>
                 ))}
@@ -204,8 +230,8 @@ export default function ScheduleTab() {
                 {weeks.map((wk, i) => {
                   const isToday = diffDays(wk, weekStart(new Date())) === 0
                   return (
-                    <div key={i} style={{ width: WEEK_W, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRight: '1px solid rgba(84,84,88,0.2)', fontSize: 10, color: isToday ? '#0a84ff' : '#636366', fontWeight: isToday ? 700 : 400 }}>
-                      {wk.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' })}
+                    <div key={i} style={{ width: weekW, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRight: '1px solid rgba(84,84,88,0.2)', fontSize: 10, color: isToday ? '#0a84ff' : '#636366', fontWeight: isToday ? 700 : 400, overflow: 'hidden' }}>
+                      {weekW >= 40 ? wk.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) : (i % 2 === 0 ? wk.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) : '')}
                     </div>
                   )
                 })}
@@ -251,11 +277,11 @@ export default function ScheduleTab() {
             {/* Timeline column */}
             <div style={{ flex: 1, position: 'relative', height: bodyH || ROW_H * 3 }}>
               {/* Today line */}
-              <div style={{ position: 'absolute', top: 0, bottom: 0, left: diffDays(tlStart, new Date()) * DAY_W, width: 1, background: 'rgba(255,69,58,0.5)', zIndex: 4, pointerEvents: 'none' }} />
+              <div style={{ position: 'absolute', top: 0, bottom: 0, left: diffDays(tlStart, new Date()) * dayW, width: 1, background: 'rgba(255,69,58,0.5)', zIndex: 4, pointerEvents: 'none' }} />
 
               {/* Week grid lines */}
               {weeks.map((_, i) => (
-                <div key={i} style={{ position: 'absolute', top: 0, bottom: 0, left: i * WEEK_W, width: 1, background: 'rgba(84,84,88,0.18)', pointerEvents: 'none' }} />
+                <div key={i} style={{ position: 'absolute', top: 0, bottom: 0, left: i * weekW, width: 1, background: 'rgba(84,84,88,0.18)', pointerEvents: 'none' }} />
               ))}
 
               {/* Row dividers */}
@@ -271,17 +297,18 @@ export default function ScheduleTab() {
                 const barH  = isPhase ? 30 : 20
                 const color = STATUS_MAP[task.status]?.color || phaseColor
                 const top   = i * ROW_H + (ROW_H - barH) / 2
+                const minLabelWidth = isPhase ? 60 : 50
 
                 return (
                   <div key={task.id}>
                     {/* Bar */}
                     <div
                       onMouseDown={e => startDrag(e, task.id, 'move')}
-                      style={{ position: 'absolute', top, left, width, height: barH, background: color, borderRadius: isPhase ? 3 : 5, opacity: 0.88, cursor: drag?.taskId === task.id ? 'grabbing' : 'grab', display: 'flex', alignItems: 'center', overflow: 'hidden', zIndex: 2 }}
+                      style={{ position: 'absolute', top, left, width, height: barH, background: color, borderRadius: isPhase ? 4 : 5, opacity: 0.9, cursor: drag?.taskId === task.id ? 'grabbing' : 'grab', display: 'flex', alignItems: 'center', overflow: 'hidden', zIndex: 2 }}
                       title={`${task.name}: ${fmtDate(task.start_date)} – ${fmtDate(task.end_date)}`}
                     >
-                      {width > 44 && (
-                        <span style={{ fontSize: 9, color: '#fff', paddingLeft: 5, overflow: 'hidden', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none' }}>
+                      {width > minLabelWidth && (
+                        <span style={{ fontSize: isPhase ? 12 : 11, fontWeight: isPhase ? 700 : 600, color: '#fff', paddingLeft: 7, overflow: 'hidden', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none', letterSpacing: isPhase ? '0.01em' : 0 }}>
                           {task.name}
                         </span>
                       )}
@@ -293,7 +320,7 @@ export default function ScheduleTab() {
                     </div>
                     {/* Date label */}
                     {width > 60 && (
-                      <div style={{ position: 'absolute', top: top + barH + 2, left, fontSize: 8, color: '#636366', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none' }}>
+                      <div style={{ position: 'absolute', top: top + barH + 2, left, fontSize: 9, color: '#636366', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none' }}>
                         {fmtDate(task.end_date)}
                       </div>
                     )}
@@ -302,7 +329,7 @@ export default function ScheduleTab() {
               })}
 
               {/* Dependency arrows */}
-              <DependencyArrows tasks={tasks} flatList={flatList} tlStart={tlStart} bodyH={bodyH || ROW_H * 3} timelineW={timelineW} />
+              <DependencyArrows tasks={tasks} flatList={flatList} tlStart={tlStart} bodyH={bodyH || ROW_H * 3} timelineW={timelineW} dayW={dayW} />
             </div>
           </div>
 
@@ -328,7 +355,7 @@ export default function ScheduleTab() {
 }
 
 // ── Dependency arrows ─────────────────────────────────────────────────────────
-function DependencyArrows({ tasks, flatList, tlStart, bodyH, timelineW }) {
+function DependencyArrows({ tasks, flatList, tlStart, bodyH, timelineW, dayW }) {
   const arrows = []
   flatList.forEach(({ task }, toIdx) => {
     ;(task.depends_on || []).forEach(depId => {
@@ -336,9 +363,9 @@ function DependencyArrows({ tasks, flatList, tlStart, bodyH, timelineW }) {
       if (fromIdx === -1) return
       const fromTask = flatList[fromIdx].task
       if (!fromTask.end_date || !task.start_date) return
-      const x1 = diffDays(tlStart, parse(fromTask.end_date)) * DAY_W + DAY_W
+      const x1 = diffDays(tlStart, parse(fromTask.end_date)) * dayW + dayW
       const y1 = fromIdx * ROW_H + ROW_H / 2
-      const x2 = diffDays(tlStart, parse(task.start_date)) * DAY_W
+      const x2 = diffDays(tlStart, parse(task.start_date)) * dayW
       const y2 = toIdx  * ROW_H + ROW_H / 2
       arrows.push({ x1, y1, x2, y2, key: `${depId}-${task.id}` })
     })

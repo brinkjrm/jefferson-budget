@@ -122,19 +122,31 @@ export default function BudgetTab() {
 }
 
 function Section({ title, items, editingId, editFields, setEditFields, onEdit, onSave, onCancel, onToggleLock, onDelete, onAdd }) {
+  const [collapsed, setCollapsed] = useState(false)
   const sEst = items.reduce((s, i) => s + (i.estimated_cost || 0), 0)
   const sAct = items.reduce((s, i) => s + (i.actual_cost || 0), 0)
 
   return (
     <div className="apple-card overflow-hidden">
       {/* Section header */}
-      <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid rgba(84,84,88,0.4)', background: '#2c2c2e' }}>
-        <span className="font-semibold text-lbl tracking-wide text-sm">{title}</span>
+      <div
+        className="flex items-center justify-between px-4 py-3 cursor-pointer"
+        style={{ borderBottom: collapsed ? 'none' : '1px solid rgba(84,84,88,0.4)', background: '#2c2c2e' }}
+        onClick={() => setCollapsed(c => !c)}
+      >
+        <div className="flex items-center gap-2">
+          <span style={{ fontSize: 9, color: '#636366' }}>{collapsed ? '▶' : '▼'}</span>
+          <span className="font-semibold text-lbl tracking-wide text-sm">{title}</span>
+          {collapsed && <span className="text-lbl3 text-xs">({items.length} items)</span>}
+        </div>
         <span className="text-lbl2 text-xs">
           Est <span className="text-lbl font-semibold">{fmt(sEst)}</span>
           {sAct > 0 && <> · Actual <span className="text-pos font-semibold">{fmt(sAct)}</span></>}
         </span>
       </div>
+
+      {collapsed && <div />}
+      {!collapsed && <>
 
       {/* Column headers */}
       <div className="grid grid-cols-12 px-4 py-2 text-xs font-semibold uppercase tracking-widest"
@@ -203,6 +215,8 @@ function Section({ title, items, editingId, editFields, setEditFields, onEdit, o
           + Add line item
         </button>
       </div>
+
+      </>}
     </div>
   )
 }

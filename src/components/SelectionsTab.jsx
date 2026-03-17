@@ -45,6 +45,8 @@ export default function SelectionsTab() {
 
   async function saveEdit(fields) {
     const patch = {
+      item_description: fields.item_description || null,
+      room:         fields.room         || null,
       product_link: fields.product_link || null,
       brand_model:  fields.brand_model  || null,
       unit_price:   fields.unit_price   ? parseFloat(String(fields.unit_price).replace(/[$,]/g,'')) : null,
@@ -56,6 +58,31 @@ export default function SelectionsTab() {
     setItems(prev => prev.map(i => i.id === editItem.id ? { ...i, ...patch } : i))
     setEditItem(null)
     showToast('Saved!')
+  }
+
+  async function addItem(category, section) {
+    const sectionItems = items.filter(i => i.category === category && (i.section || 'General') === section)
+    const maxOrder = sectionItems.reduce((m, i) => Math.max(m, i.sort_order || 0), 0)
+    const { data, error } = await supabase.from('selections').insert({
+      category,
+      section,
+      room: '',
+      item_description: 'New Item',
+      qty: 1,
+      status: 'TBD',
+      sort_order: maxOrder + 1,
+    }).select().single()
+    if (error) { showToast('Error adding item', 'error'); return }
+    setItems(prev => [...prev, data])
+    setEditItem({ ...data })
+  }
+
+  async function deleteItem(id) {
+    if (!confirm('Delete this selection item?')) return
+    await supabase.from('selections').delete().eq('id', id)
+    setItems(prev => prev.filter(i => i.id !== id))
+    setEditItem(null)
+    showToast('Deleted')
   }
 
   // Derived stats
@@ -215,6 +242,12 @@ export default function SelectionsTab() {
                           </div>
                         )
                       })}
+                      <div style={{ padding: '6px 16px', borderBottom: '1px solid rgba(84,84,88,0.15)' }}>
+                        <button
+                          onClick={() => addItem(cat, section)}
+                          style={{ fontSize: 11, fontWeight: 600, color: '#0a84ff', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                        >+ Add item</button>
+                      </div>
                     </div>
                   )
                 })}
@@ -237,6 +270,7 @@ export default function SelectionsTab() {
           onChange={patch => setEditItem(p => ({ ...p, ...patch }))}
           onSave={() => saveEdit(editItem)}
           onCancel={() => setEditItem(null)}
+          onDelete={() => deleteItem(editItem.id)}
         />
       )}
     </div>
@@ -244,7 +278,7 @@ export default function SelectionsTab() {
 }
 
 // ── Edit modal ────────────────────────────────────────────────────────────────
-function EditModal({ item, onChange, onSave, onCancel }) {
+function EditModal({ item, onChange, onSave, onCancel, onDelete }) {
   const st = STATUS[item.status] || STATUS.TBD
 
   return (
@@ -255,14 +289,36 @@ function EditModal({ item, onChange, onSave, onCancel }) {
         <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: 16, gap: 12 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#636366', marginBottom: 2 }}>
-              {item.category} · {item.room}
+              {item.category} · {item.section}
             </div>
             <div style={{ fontSize: 16, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.item_description}</div>
-            {item.notes && <div style={{ fontSize: 12, color: '#636366', marginTop: 4, fontStyle: 'italic' }}>{item.notes}</div>}
           </div>
-          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
+            <button onClick={onDelete} style={{ fontSize: 12, color: '#ff453a', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px' }} title="Delete item">🗑</button>
             <button onClick={onCancel} className="btn-secondary text-xs px-2 py-1.5">Cancel</button>
             <button onClick={onSave} className="btn-primary text-xs px-3 py-1.5">Save</button>
+          </div>
+        </div>
+
+        {/* Item description + Room */}
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10, marginBottom: 12 }}>
+          <div>
+            <label style={{ fontSize: 11, color: '#636366', display: 'block', marginBottom: 4 }}>Item Description</label>
+            <input
+              value={item.item_description || ''}
+              onChange={e => onChange({ item_description: e.target.value })}
+              className="apple-input text-sm w-full"
+              placeholder="Describe the item…"
+            />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: '#636366', display: 'block', marginBottom: 4 }}>Room</label>
+            <input
+              value={item.room || ''}
+              onChange={e => onChange({ room: e.target.value })}
+              className="apple-input text-sm w-full"
+              placeholder="e.g. Master Bath"
+            />
           </div>
         </div>
 

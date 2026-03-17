@@ -6,12 +6,14 @@ import DrawsTab from './components/DrawsTab.jsx'
 import SettingsTab from './components/SettingsTab.jsx'
 import ScheduleTab from './components/ScheduleTab.jsx'
 import BidsTab from './components/BidsTab.jsx'
+import SelectionsTab from './components/SelectionsTab.jsx'
 import ChatPanel from './components/ChatPanel.jsx'
 
 const TABS = [
   { id: 'Budget',        label: 'Budget'      },
   { id: 'Schedule',      label: 'Schedule'    },
   { id: 'Bids',          label: 'Bids'        },
+  { id: 'Selections',    label: 'Selections'  },
   { id: 'Prepaid Items', label: 'Prepaid'     },
   { id: 'Draw Sheets',   label: 'Draw Sheets' },
   { id: 'Settings',      label: 'Settings'    },
@@ -92,6 +94,7 @@ export default function App() {
         {tab === 'Budget'        && <BudgetTab settings={settings} />}
         {tab === 'Schedule'      && <ScheduleTab />}
         {tab === 'Bids'          && <BidsTab />}
+        {tab === 'Selections'    && <SelectionsTab />}
         {tab === 'Prepaid Items' && <PrepaidTab />}
         {tab === 'Draw Sheets'   && <DrawsTab settings={settings} />}
         {tab === 'Settings'      && <SettingsTab settings={settings} onSave={saveSettings} />}

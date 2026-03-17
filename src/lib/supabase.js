@@ -5,6 +5,15 @@ const SUPABASE_ANON_KEY = 'sb_publishable_jOL4vqNZCBd8vw0U7CYOqQ_-unZJWfi'
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
 
+export async function uploadPlan(file) {
+  const ext = file.name.split('.').pop()
+  const path = `plan-${Date.now()}.${ext}`
+  const { error } = await supabase.storage.from('plan-pdfs').upload(path, file, { upsert: true })
+  if (error) throw error
+  const { data: { publicUrl } } = supabase.storage.from('plan-pdfs').getPublicUrl(path)
+  return { path, publicUrl }
+}
+
 export async function uploadInvoice(file, drawId, itemIndex) {
   const ext = file.name.split('.').pop()
   const path = `draw-${drawId}/item-${itemIndex}-${Date.now()}.${ext}`

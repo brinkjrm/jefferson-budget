@@ -47,7 +47,8 @@ export default function BudgetTab() {
     setEditingId(item.id)
     setEditFields({
       name: item.name, code: item.code || '',
-      estimated_cost: item.estimated_cost ?? '',
+      est_material_cost: item.est_material_cost ?? '',
+      est_labor_cost:    item.est_labor_cost    ?? '',
       actual_cost: item.actual_cost ?? '',
       vendor: item.vendor || '', notes: item.notes || '',
       payments: item.payments || [],
@@ -55,9 +56,13 @@ export default function BudgetTab() {
   }
 
   async function saveEdit(id) {
+    const mat = num(editFields.est_material_cost)
+    const lab = num(editFields.est_labor_cost)
     await updateItem(id, {
       name: editFields.name, code: editFields.code,
-      estimated_cost: num(editFields.estimated_cost),
+      est_material_cost: mat,
+      est_labor_cost:    lab,
+      estimated_cost:    (mat || 0) + (lab || 0),
       actual_cost: editFields.actual_cost !== '' ? num(editFields.actual_cost) : null,
       vendor: editFields.vendor,
       notes: editFields.notes,
@@ -121,6 +126,9 @@ export default function BudgetTab() {
   )
 }
 
+// grid layout: Code(1) Desc(2) EstMat(1) EstLab(1) Actual(2) Vendor(1) Notes(2) Payments(1) Lock(1) = 12
+const COLS = 'grid-cols-12'
+
 function Section({ title, items, editingId, editFields, setEditFields, onEdit, onSave, onCancel, onToggleLock, onDelete, onAdd }) {
   const [collapsed, setCollapsed] = useState(false)
   const sEst = items.reduce((s, i) => s + (i.estimated_cost || 0), 0)
@@ -149,12 +157,13 @@ function Section({ title, items, editingId, editFields, setEditFields, onEdit, o
       {!collapsed && <>
 
       {/* Column headers */}
-      <div className="grid grid-cols-12 px-4 py-2 text-xs font-semibold uppercase tracking-widest"
+      <div className={`grid ${COLS} px-4 py-2 text-xs font-semibold uppercase tracking-widest`}
         style={{ color: '#636366', borderBottom: '1px solid rgba(84,84,88,0.3)' }}>
         <div className="col-span-1">Code</div>
         <div className="col-span-2">Description</div>
-        <div className="col-span-2 text-right">Estimated</div>
-        <div className="col-span-2 text-right">Bid / Actual</div>
+        <div className="col-span-1 text-right">Est. Mat.</div>
+        <div className="col-span-1 text-right">Est. Labor</div>
+        <div className="col-span-2 text-right">Actual</div>
         <div className="col-span-1">Vendor</div>
         <div className="col-span-2">Notes</div>
         <div className="col-span-1">Payments</div>
@@ -179,12 +188,13 @@ function Section({ title, items, editingId, editFields, setEditFields, onEdit, o
           <div
             key={item.id}
             onClick={() => onEdit(item)}
-            className={`grid grid-cols-12 px-4 py-2.5 cursor-pointer transition-colors text-sm ${isOver ? 'row-overage' : isLocked ? 'row-locked' : 'row-pending'}`}
+            className={`grid ${COLS} px-4 py-2.5 cursor-pointer transition-colors text-sm ${isOver ? 'row-overage' : isLocked ? 'row-locked' : 'row-pending'}`}
             style={{ borderBottom: '1px solid rgba(84,84,88,0.2)' }}
           >
             <div className="col-span-1 font-mono text-xs" style={{ color: '#636366' }}>{item.code || ''}</div>
             <div className="col-span-2 font-medium text-lbl truncate">{item.name}</div>
-            <div className="col-span-2 text-right text-lbl2">{fmt(item.estimated_cost)}</div>
+            <div className="col-span-1 text-right text-lbl2 text-xs">{fmt(item.est_material_cost)}</div>
+            <div className="col-span-1 text-right text-lbl2 text-xs">{fmt(item.est_labor_cost)}</div>
             <div className={`col-span-2 text-right font-semibold ${isOver ? 'text-neg' : isLocked ? 'text-pos' : 'text-lbl3'}`}>
               {item.actual_cost != null ? fmt(item.actual_cost) : '—'}
               {isOver && <span className="ml-1 text-xs">▲</span>}
@@ -250,12 +260,13 @@ function EditRow({ fields, setFields, onSave, onCancel, onDelete }) {
     <div className="px-4 py-3 text-sm"
       style={{ background: 'rgba(10,132,255,0.07)', borderBottom: '1px solid rgba(10,132,255,0.3)' }}>
 
-      {/* Main fields */}
-      <div className="grid grid-cols-12 gap-1.5 mb-2">
+      {/* Main fields — same 12-col grid */}
+      <div className={`grid ${COLS} gap-1.5 mb-2`}>
         <div className="col-span-1"><input {...f('code')} placeholder="Code" /></div>
         <div className="col-span-2"><input {...f('name')} placeholder="Description" /></div>
-        <div className="col-span-2"><input {...f('estimated_cost')} placeholder="Est. $" /></div>
-        <div className="col-span-2"><input {...f('actual_cost')} placeholder="Bid / Actual $" /></div>
+        <div className="col-span-1"><input {...f('est_material_cost')} placeholder="Mat. $" /></div>
+        <div className="col-span-1"><input {...f('est_labor_cost')} placeholder="Labor $" /></div>
+        <div className="col-span-2"><input {...f('actual_cost')} placeholder="Actual $" /></div>
         <div className="col-span-1"><input {...f('vendor')} placeholder="Vendor" /></div>
         <div className="col-span-2 relative">
           <input {...f('notes')} placeholder="Notes" />

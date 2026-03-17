@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
 
 const fmt = n => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0 })
 const num = v => v === '' || v == null ? null : parseFloat(String(v).replace(/[$,]/g, '')) || 0
 
+const SECTION_PREFIX = { soft: 'B', hard: 'C' }
+
 export default function BudgetTab() {
-  const [items, setItems]       = useState([])
-  const [loading, setLoading]   = useState(true)
+  const [items, setItems]         = useState([])
+  const [loading, setLoading]     = useState(true)
   const [editingId, setEditingId] = useState(null)
   const [editFields, setEditFields] = useState({})
 
@@ -36,11 +38,40 @@ export default function BudgetTab() {
   }
 
   async function addItem(section) {
-    const maxOrder = items.filter(i => i.section === section).reduce((m, i) => Math.max(m, i.sort_order || 0), 0)
+    const sectionItems = items.filter(i => i.section === section)
+    const maxOrder = sectionItems.reduce((m, i) => Math.max(m, i.sort_order || 0), 0)
+    const newCode  = `${SECTION_PREFIX[section]}-${String(sectionItems.length + 1).padStart(2, '0')}`
     const { data } = await supabase.from('line_items').insert({
-      section, name: 'New Line Item', estimated_cost: 0, status: 'pending', sort_order: maxOrder + 1
+      section, name: 'New Line Item', estimated_cost: 0, status: 'pending',
+      sort_order: maxOrder + 1, code: newCode,
     }).select().single()
     if (data) { setItems(prev => [...prev, data]); startEdit(data) }
+  }
+
+  // Drag-and-drop reorder: reassign sort_order + auto-generate codes
+  async function reorderItems(section, newItems) {
+    const prefix = SECTION_PREFIX[section] || section.toUpperCase().slice(0, 1)
+    const updates = newItems.map((item, i) => ({
+      id:         item.id,
+      sort_order: i + 1,
+      code:       `${prefix}-${String(i + 1).padStart(2, '0')}`,
+    }))
+
+    // Optimistic local update
+    setItems(prev => {
+      const others  = prev.filter(i => i.section !== section)
+      const updated = newItems.map((item, i) => ({ ...item, ...updates[i] }))
+      return [...others, ...updated]
+    })
+
+    // Persist
+    await Promise.all(updates.map(u =>
+      supabase.from('line_items').update({
+        sort_order: u.sort_order,
+        code:       u.code,
+        updated_at: new Date().toISOString(),
+      }).eq('id', u.id)
+    ))
   }
 
   function startEdit(item) {
@@ -65,14 +96,14 @@ export default function BudgetTab() {
       estimated_cost:    (mat || 0) + (lab || 0),
       actual_cost: editFields.actual_cost !== '' ? num(editFields.actual_cost) : null,
       vendor: editFields.vendor,
-      notes: editFields.notes,
+      notes:  editFields.notes,
       payments: editFields.payments,
     })
     setEditingId(null)
   }
 
-  const softItems = items.filter(i => i.section === 'soft')
-  const hardItems = items.filter(i => i.section === 'hard')
+  const softItems = items.filter(i => i.section === 'soft').sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+  const hardItems = items.filter(i => i.section === 'hard').sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
   const totalEst  = items.reduce((s, i) => s + (i.estimated_cost || 0), 0)
   const locked    = items.filter(i => i.status === 'locked')
   const lockedAmt = locked.reduce((s, i) => s + (i.actual_cost ?? i.estimated_cost ?? 0), 0)
@@ -110,29 +141,64 @@ export default function BudgetTab() {
           <span className="w-2.5 h-2.5 rounded-sm inline-block" style={{ background: 'rgba(255,69,58,0.2)', border: '1px solid rgba(255,69,58,0.4)' }}/>
           Over budget
         </span>
-        <span className="ml-auto italic" style={{ color: '#3a3a3c' }}>Tap any row to edit</span>
+        <span className="ml-auto italic" style={{ color: '#3a3a3c' }}>Drag ⠿ to reorder · tap row to edit</span>
       </div>
 
-      <Section title="B · SOFT COSTS" items={softItems} editingId={editingId} editFields={editFields}
+      <Section title="B · SOFT COSTS" section="soft" items={softItems} editingId={editingId} editFields={editFields}
         setEditFields={setEditFields} onEdit={startEdit} onSave={saveEdit} onCancel={() => setEditingId(null)}
-        onToggleLock={toggleLock} onDelete={deleteItem} onAdd={() => addItem('soft')} />
+        onToggleLock={toggleLock} onDelete={deleteItem} onAdd={() => addItem('soft')}
+        onReorder={newItems => reorderItems('soft', newItems)} />
 
       <div className="mb-4" />
 
-      <Section title="C · HARD COSTS" items={hardItems} editingId={editingId} editFields={editFields}
+      <Section title="C · HARD COSTS" section="hard" items={hardItems} editingId={editingId} editFields={editFields}
         setEditFields={setEditFields} onEdit={startEdit} onSave={saveEdit} onCancel={() => setEditingId(null)}
-        onToggleLock={toggleLock} onDelete={deleteItem} onAdd={() => addItem('hard')} />
+        onToggleLock={toggleLock} onDelete={deleteItem} onAdd={() => addItem('hard')}
+        onReorder={newItems => reorderItems('hard', newItems)} />
     </div>
   )
 }
 
-// grid layout: Code(1) Desc(2) EstMat(1) EstLab(1) Actual(2) Vendor(1) Notes(2) Payments(1) Lock(1) = 12
+// grid: handle(0) Code(1) Desc(2) EstMat(1) EstLab(1) Actual(2) Vendor(1) Notes(2) Payments(1) Lock(1) = 12
 const COLS = 'grid-cols-12'
 
-function Section({ title, items, editingId, editFields, setEditFields, onEdit, onSave, onCancel, onToggleLock, onDelete, onAdd }) {
+function Section({ title, items, editingId, editFields, setEditFields, onEdit, onSave, onCancel,
+                   onToggleLock, onDelete, onAdd, onReorder }) {
   const [collapsed, setCollapsed] = useState(false)
+  const [dragOverIdx, setDragOverIdx] = useState(null)
+  const dragIdx = useRef(null)
+
   const sEst = items.reduce((s, i) => s + (i.estimated_cost || 0), 0)
   const sAct = items.reduce((s, i) => s + (i.actual_cost || 0), 0)
+
+  function handleDragStart(e, idx) {
+    dragIdx.current = idx
+    e.dataTransfer.effectAllowed = 'move'
+    setTimeout(() => { if (e.target) e.target.style.opacity = '0.35' }, 0)
+  }
+
+  function handleDragEnd(e) {
+    if (e.target) e.target.style.opacity = ''
+    dragIdx.current = null
+    setDragOverIdx(null)
+  }
+
+  function handleDragOver(e, idx) {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (dragOverIdx !== idx) setDragOverIdx(idx)
+  }
+
+  function handleDrop(e, idx) {
+    e.preventDefault()
+    const from = dragIdx.current
+    setDragOverIdx(null)
+    if (from === null || from === idx) return
+    const reordered = [...items]
+    const [moved] = reordered.splice(from, 1)
+    reordered.splice(idx, 0, moved)
+    onReorder(reordered)
+  }
 
   return (
     <div className="apple-card overflow-hidden">
@@ -153,7 +219,6 @@ function Section({ title, items, editingId, editFields, setEditFields, onEdit, o
         </span>
       </div>
 
-      {collapsed && <div />}
       {!collapsed && <>
 
       {/* Column headers */}
@@ -171,27 +236,47 @@ function Section({ title, items, editingId, editFields, setEditFields, onEdit, o
       </div>
 
       {/* Rows */}
-      {items.map(item => {
+      {items.map((item, idx) => {
         if (editingId === item.id) {
           return <EditRow key={item.id} fields={editFields} setFields={setEditFields}
             onSave={() => onSave(item.id)} onCancel={onCancel} onDelete={() => onDelete(item.id)} />
         }
-        const isLocked = item.status === 'locked'
-        const isOver   = item.actual_cost != null && item.actual_cost > (item.estimated_cost || 0)
-        const pmts     = item.payments || []
-        const pmtTotal = pmts.reduce((s, p) => s + (num(p.amount) || 0), 0)
-        const pmtLabel = pmts.length === 0 ? '' :
+        const isLocked   = item.status === 'locked'
+        const isOver     = item.actual_cost != null && item.actual_cost > (item.estimated_cost || 0)
+        const isDragOver = dragOverIdx === idx
+        const pmts       = item.payments || []
+        const pmtTotal   = pmts.reduce((s, p) => s + (num(p.amount) || 0), 0)
+        const pmtLabel   = pmts.length === 0 ? '' :
           pmts.length === 1
             ? (pmts[0].date ? new Date(pmts[0].date + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : fmt(pmtTotal))
             : `${pmts.length} pmts`
+
         return (
           <div
             key={item.id}
-            onClick={() => onEdit(item)}
-            className={`grid ${COLS} px-4 py-2.5 cursor-pointer transition-colors text-sm ${isOver ? 'row-overage' : isLocked ? 'row-locked' : 'row-pending'}`}
-            style={{ borderBottom: '1px solid rgba(84,84,88,0.2)' }}
+            draggable={!editingId}
+            onDragStart={e => handleDragStart(e, idx)}
+            onDragEnd={handleDragEnd}
+            onDragOver={e => handleDragOver(e, idx)}
+            onDrop={e => handleDrop(e, idx)}
+            onClick={() => !editingId && onEdit(item)}
+            className={`grid ${COLS} px-4 py-2.5 transition-colors text-sm ${!editingId ? 'cursor-pointer' : ''} ${isOver ? 'row-overage' : isLocked ? 'row-locked' : 'row-pending'}`}
+            style={{
+              borderBottom: '1px solid rgba(84,84,88,0.2)',
+              borderTop: isDragOver ? '2px solid #0a84ff' : undefined,
+            }}
           >
-            <div className="col-span-1 font-mono text-xs" style={{ color: '#636366' }}>{item.code || ''}</div>
+            {/* Code — doubles as drag handle */}
+            <div className="col-span-1 flex items-center gap-1.5">
+              {!editingId && (
+                <span
+                  className="text-lbl3 select-none shrink-0"
+                  style={{ fontSize: 11, cursor: 'grab', lineHeight: 1 }}
+                  title="Drag to reorder"
+                >⠿</span>
+              )}
+              <span className="font-mono text-xs" style={{ color: '#636366' }}>{item.code || ''}</span>
+            </div>
             <div className="col-span-2 font-medium text-lbl truncate">{item.name}</div>
             <div className="col-span-1 text-right text-lbl2 text-xs">{fmt(item.est_material_cost)}</div>
             <div className="col-span-1 text-right text-lbl2 text-xs">{fmt(item.est_labor_cost)}</div>
@@ -202,9 +287,7 @@ function Section({ title, items, editingId, editFields, setEditFields, onEdit, o
             <div className="col-span-1 text-xs text-lbl2 truncate">{item.vendor || ''}</div>
             <div className="col-span-2 text-xs text-lbl2 truncate" title={item.notes || ''}>{item.notes || ''}</div>
             <div className="col-span-1 text-xs text-lbl3">
-              {pmtLabel && (
-                <span title={pmts.length > 1 ? fmt(pmtTotal) : undefined}>{pmtLabel}</span>
-              )}
+              {pmtLabel && <span title={pmts.length > 1 ? fmt(pmtTotal) : undefined}>{pmtLabel}</span>}
             </div>
             <div className="col-span-1 flex justify-center" onClick={e => e.stopPropagation()}>
               <button
@@ -260,7 +343,6 @@ function EditRow({ fields, setFields, onSave, onCancel, onDelete }) {
     <div className="px-4 py-3 text-sm"
       style={{ background: 'rgba(10,132,255,0.07)', borderBottom: '1px solid rgba(10,132,255,0.3)' }}>
 
-      {/* Main fields — same 12-col grid */}
       <div className={`grid ${COLS} gap-1.5 mb-2`}>
         <div className="col-span-1"><input {...f('code')} placeholder="Code" /></div>
         <div className="col-span-2"><input {...f('name')} placeholder="Description" /></div>
@@ -297,26 +379,12 @@ function EditRow({ fields, setFields, onSave, onCancel, onDelete }) {
           <div className="flex flex-wrap gap-2">
             {payments.map((p, i) => (
               <div key={i} className="flex items-center gap-1.5 rounded px-2 py-1.5" style={{ background: 'rgba(84,84,88,0.25)' }}>
-                <input
-                  type="date"
-                  value={p.date || ''}
-                  onChange={e => updatePayment(i, 'date', e.target.value)}
-                  className="apple-input text-xs"
-                  style={{ width: '130px' }}
-                />
-                <input
-                  type="text"
-                  value={p.amount || ''}
-                  placeholder="Amount $"
+                <input type="date" value={p.date || ''} onChange={e => updatePayment(i, 'date', e.target.value)}
+                  className="apple-input text-xs" style={{ width: '130px' }} />
+                <input type="text" value={p.amount || ''} placeholder="Amount $"
                   onChange={e => updatePayment(i, 'amount', e.target.value)}
-                  className="apple-input text-xs"
-                  style={{ width: '90px' }}
-                />
-                <button
-                  onClick={() => removePayment(i)}
-                  className="text-lbl3 hover:text-neg text-xs leading-none"
-                  title="Remove payment"
-                >✕</button>
+                  className="apple-input text-xs" style={{ width: '90px' }} />
+                <button onClick={() => removePayment(i)} className="text-lbl3 hover:text-neg text-xs leading-none" title="Remove payment">✕</button>
               </div>
             ))}
           </div>

@@ -6,8 +6,8 @@ const num = v => v === '' || v == null ? null : parseFloat(String(v).replace(/[$
 
 const SECTION_PREFIX = { soft: 'B', hard: 'C' }
 
-// 9 columns: Code | Description | Est.Mat | Est.Labor | Actual | Vendor | Notes | Payments | Lock
-const COL_COUNT = 9
+// 10 columns: Code | Description | Est.Mat | Est.Labor | Total Est. | Actual | Vendor | Notes | Payments | Lock
+const COL_COUNT = 10
 
 export default function BudgetTab() {
   const [items, setItems]           = useState([])
@@ -226,6 +226,7 @@ function Section({ title, items, editingId, editFields, setEditFields, onEdit, o
                 <TH>Description</TH>
                 <TH right>Est. Mat.</TH>
                 <TH right>Est. Labor</TH>
+                <TH right>Total Est.</TH>
                 <TH right>Actual</TH>
                 <TH>Vendor</TH>
                 <TH>Notes</TH>
@@ -292,6 +293,7 @@ function Section({ title, items, editingId, editFields, setEditFields, onEdit, o
                     <td className="px-3 py-2.5 text-sm font-medium text-lbl">{item.name}</td>
                     <td className="px-3 py-2.5 text-sm text-lbl2 text-right whitespace-nowrap">{fmt(item.est_material_cost)}</td>
                     <td className="px-3 py-2.5 text-sm text-lbl2 text-right whitespace-nowrap">{fmt(item.est_labor_cost)}</td>
+                    <td className="px-3 py-2.5 text-sm font-semibold text-lbl text-right whitespace-nowrap">{fmt(item.estimated_cost)}</td>
                     <td className={`px-3 py-2.5 text-sm font-semibold text-right whitespace-nowrap ${isOver ? 'text-neg' : isLocked ? 'text-pos' : 'text-lbl3'}`}>
                       {item.actual_cost != null ? fmt(item.actual_cost) : '—'}
                       {isOver && <span className="ml-1 text-xs">▲</span>}

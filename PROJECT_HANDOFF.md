@@ -125,7 +125,44 @@ Storage buckets: `plan-pdfs`, `bid-pdfs`, `invoices` (all public, anon full acce
   the live table has since been edited through the app (costs locked, vendors added,
   etc.), so treat the SQL file as historical/structural reference, not current values.
 
-## 7. A note on why this handoff exists
+## 7. Connecting a new tool to GitHub, Vercel, and Supabase
+
+To let a new AI tool actually *make changes* (not just read this doc), it needs real
+credentials for each service. I don't have any of these and can't generate them — they're
+security-sensitive and worth deciding deliberately rather than bundling into a copy-paste
+export. Here's exactly what's needed and where to get it:
+
+**GitHub** — repo is `brinkjrm/jefferson-budget`, branch `main`.
+- If your new tool pushes code itself, it needs a Personal Access Token:
+  GitHub → Settings → Developer settings → Personal access tokens → generate one scoped
+  to just this repo (fine-grained token, `Contents: Read and write` is enough — don't grant
+  org-wide or all-repo access).
+- If you're doing the git commands yourself and just want the AI to write code, you don't
+  need a token at all — just copy its file changes over like we did tonight.
+
+**Vercel** — hosts the `api/*.js` serverless functions (and likely the frontend build).
+- Log into vercel.com → your dashboard to get the actual project name (not in this repo
+  locally, so I can't hand you the real one).
+- Required env vars on the Vercel project (Settings → Environment Variables):
+  `ANTHROPIC_API_KEY` (required — powers bid extraction, plan Q&A, budget chat),
+  `ANTHROPIC_MODEL` (optional, defaults to `claude-sonnet-4-5-20250929`),
+  `ICLOUD_EMAIL` / `ICLOUD_APP_PASSWORD` / `SUPABASE_SERVICE_KEY` (only needed if you keep
+  the email-polling feature — currently being redesigned, see §6).
+- If your new tool needs to trigger deploys itself, generate a token at
+  Vercel → Account Settings → Tokens.
+
+**Supabase** — project `qxffadumpshyaseayndy`.
+- The **anon key is already in this doc (§2) and in the shipped client code** — it's
+  public by design, safe to hand to any tool. Because RLS policies on every table are
+  "allow all" for the anon role, this key alone is enough for a new tool to read/write
+  everything the app itself can (budget, schedule, bids, etc.) — you almost certainly
+  don't need anything more privileged than this.
+- The **service role key** (used only server-side by `api/poll-email.js`) bypasses RLS
+  entirely. I've never had it — it only lives in Vercel's env vars. Don't paste it into a
+  chat unless you specifically need something the anon key can't do; if so, grab it from
+  Supabase → Project Settings → API, and treat it like a master password.
+
+## 8. A note on why this handoff exists
 
 The previous session hit two unrelated, unfixable local-environment bugs on that specific
 machine: the Bash tool's proxy never acquired a port (`APPLE_CLAUDE_CODE_PORT: Not set`,

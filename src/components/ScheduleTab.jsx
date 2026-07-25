@@ -17,6 +17,14 @@ const STATUS_MAP = {
 
 const PHASE_COLORS = ['#0a84ff','#30d158','#ff9f0a','#bf5af2','#32ade6','#ff6b6b','#ffd60a','#5e5ce6']
 
+function hexToRgba(hex, alpha) {
+  const h = hex.replace('#', '')
+  const r = parseInt(h.substring(0, 2), 16)
+  const g = parseInt(h.substring(2, 4), 16)
+  const b = parseInt(h.substring(4, 6), 16)
+  return `rgba(${r},${g},${b},${alpha})`
+}
+
 // ── House build template ──────────────────────────────────────────────────────
 const HOUSE_TEMPLATE = [
   { name: 'Pre-Construction',        color: '#5e5ce6', duration: 28, tasks: ['Permits & approvals', 'Site survey', 'Final plan review', 'Utility locates', 'Builder contract finalized'] },
@@ -370,7 +378,7 @@ export default function ScheduleTab() {
                         ? 'rgba(10,132,255,0.12)'
                         : editingId === task.id
                           ? 'rgba(10,132,255,0.1)'
-                          : isDraggingThis ? 'rgba(10,132,255,0.06)' : 'transparent',
+                          : isDraggingThis ? 'rgba(10,132,255,0.06)' : isPhase ? hexToRgba(phaseColor, 0.08) : 'transparent',
                       cursor: 'pointer', gap: 3,
                       opacity: isDraggingThis ? 0.5 : 1,
                     }}
@@ -452,7 +460,7 @@ export default function ScheduleTab() {
                 const left  = barLeft(task.start_date)
                 const width = barWidth(task.start_date, task.end_date)
                 const barH  = isPhase ? 30 : 20
-                const color = STATUS_MAP[task.status]?.color || phaseColor
+                const baseColor = (task.status && task.status !== 'not_started' && STATUS_MAP[task.status]?.color) || phaseColor
                 const top   = i * ROW_H + (ROW_H - barH) / 2
                 const minLabelW = isPhase ? 60 : 50
 
@@ -460,24 +468,29 @@ export default function ScheduleTab() {
                   <div key={task.id}>
                     <div
                       onMouseDown={e => startBarDrag(e, task.id, 'move')}
-                      style={{ position: 'absolute', top, left, width, height: barH, background: color, borderRadius: isPhase ? 4 : 5, opacity: 0.9, cursor: drag?.taskId === task.id ? 'grabbing' : 'grab', display: 'flex', alignItems: 'center', overflow: 'hidden', zIndex: 2 }}
+                      style={{
+                        position: 'absolute', top, left, width, height: barH,
+                        background: isPhase ? baseColor : hexToRgba(baseColor, 0.3),
+                        border: isPhase ? 'none' : `1.5px solid ${baseColor}`,
+                        borderRadius: isPhase ? 4 : 5,
+                        opacity: isPhase ? 0.95 : 1,
+                        cursor: drag?.taskId === task.id ? 'grabbing' : 'grab', display: 'flex', alignItems: 'center', overflow: 'hidden', zIndex: 2
+                      }}
                       title={`${task.name}: ${fmtDate(task.start_date)} – ${fmtDate(task.end_date)}`}
                     >
                       {width > minLabelW && (
-                        <span style={{ fontSize: isPhase ? 12 : 11, fontWeight: isPhase ? 700 : 600, color: '#fff', paddingLeft: 7, overflow: 'hidden', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none' }}>
+                        <span style={{ fontSize: isPhase ? 12 : 11, fontWeight: isPhase ? 700 : 600, color: isPhase ? '#fff' : baseColor, paddingLeft: 7, overflow: 'hidden', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none' }}>
                           {task.name}
                         </span>
                       )}
                       <div
                         onMouseDown={e => startBarDrag(e, task.id, 'resize')}
-                        style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 6, cursor: 'ew-resize', background: 'rgba(255,255,255,0.25)', borderRadius: '0 5px 5px 0' }}
+                        style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 6, cursor: 'ew-resize', background: isPhase ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.15)', borderRadius: '0 5px 5px 0' }}
                       />
                     </div>
-                    {width > 60 && (
-                      <div style={{ position: 'absolute', top: top + barH + 2, left, fontSize: 9, color: '#636366', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none' }}>
-                        {fmtDate(task.end_date)}
-                      </div>
-                    )}
+                    <div style={{ position: 'absolute', top: top + barH + 2, left, fontSize: 9, color: '#636366', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none' }}>
+                      {fmtDate(task.start_date)} – {fmtDate(task.end_date)}
+                    </div>
                   </div>
                 )
               })}

@@ -24,7 +24,7 @@ export function createProjectModel(collections = {}, options = {}) {
     loan_amount: '',
     loan_number: '',
     project_email: 'Josh@3120jeffersonst.com',
-    daily_sms_enabled: 'true',
+    daily_sms_enabled: 'false',
     sms_timezone: 'America/Denver',
     ...settingsFromRows(collections.settings || []),
   }

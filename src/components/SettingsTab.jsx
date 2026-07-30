@@ -79,17 +79,26 @@ export default function SettingsTab({ settings, onSave }) {
           <IntegrationStatus label="Text delivery" connected={notificationStatus?.sms?.configured} detail={notificationStatus?.sms?.configured ? 'Connected securely' : 'Not connected'} loading={!notificationStatus} />
         </div>
 
-        <div className="flex items-center justify-between gap-4 rounded-apple p-4" style={{ background: '#2c2c2e' }}>
+        <div className="flex items-start justify-between gap-4 rounded-apple p-4" style={{ background: '#2c2c2e' }}>
           <div>
             <div className="text-lbl text-sm font-medium">Send the daily briefing</div>
-            <div className="text-lbl3 text-xs mt-0.5">Around 7–8 AM Mountain Time · no automatic payments or approvals</div>
+            <div className="text-lbl3 text-xs mt-1 leading-5">
+              By enabling, you agree to receive up to one automated project briefing per day at the project mobile number. Message and data rates may apply. Reply STOP to opt out or HELP for help. Consent is not a condition of purchase. See our <a className="text-acc" href="/terms">Terms</a> and <a className="text-acc" href="/privacy">Privacy Policy</a>.
+            </div>
           </div>
-          <button type="button" role="switch" aria-checked={fields.daily_sms_enabled !== 'false'}
-            onClick={() => setFields(previous => ({ ...previous, daily_sms_enabled: previous.daily_sms_enabled === 'false' ? 'true' : 'false' }))}
+          <button type="button" role="switch" aria-label="Consent to daily text briefings" aria-checked={fields.daily_sms_enabled === 'true'}
+            onClick={() => setFields(previous => {
+              const enabling = previous.daily_sms_enabled !== 'true'
+              return {
+                ...previous,
+                daily_sms_enabled: enabling ? 'true' : 'false',
+                ...(enabling ? { daily_sms_consent_at: new Date().toISOString() } : {}),
+              }
+            })}
             className="relative rounded-full flex-shrink-0 transition-colors"
-            style={{ width: 48, height: 28, background: fields.daily_sms_enabled === 'false' ? '#48484a' : '#30d158' }}>
+            style={{ width: 48, height: 28, background: fields.daily_sms_enabled === 'true' ? '#30d158' : '#48484a' }}>
             <span className="absolute rounded-full bg-white transition-all"
-              style={{ width: 22, height: 22, top: 3, left: fields.daily_sms_enabled === 'false' ? 3 : 23 }} />
+              style={{ width: 22, height: 22, top: 3, left: fields.daily_sms_enabled === 'true' ? 23 : 3 }} />
           </button>
         </div>
 

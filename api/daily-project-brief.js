@@ -18,7 +18,7 @@ export default async function handler(req, res) {
   const settingsResult = await supabase.from('settings').select('key,value')
   if (settingsResult.error) return res.status(500).json({ error: settingsResult.error.message })
   const settings = Object.fromEntries((settingsResult.data || []).map(row => [row.key, row.value]))
-  if (settings.daily_sms_enabled === 'false') return res.json({ skipped: true, reason: 'Daily SMS is disabled' })
+  if (settings.daily_sms_enabled !== 'true') return res.json({ skipped: true, reason: 'Daily SMS consent is not enabled' })
 
   let inboxSync = { imported: [], count: 0, errors: [] }
   let inboxSyncError = ''

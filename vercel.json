@@ -4,5 +4,9 @@
       "path": "/api/daily-project-brief",
       "schedule": "0 14 * * *"
     }
+  ],
+  "rewrites": [
+    { "source": "/privacy", "destination": "/index.html" },
+    { "source": "/terms", "destination": "/index.html" }
   ]
 }

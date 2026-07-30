@@ -2,6 +2,7 @@ import React, { lazy, Suspense, useState } from 'react'
 import { useProject } from './context/ProjectContext.jsx'
 import ChatPanel from './components/ChatPanel.jsx'
 import ExecutiveDashboard from './components/ExecutiveDashboard.jsx'
+import LegalPage from './components/LegalPage.jsx'
 
 const BudgetTab = lazy(() => import('./components/BudgetTab.jsx'))
 const PrepaidTab = lazy(() => import('./components/PrepaidTab.jsx'))
@@ -28,6 +29,10 @@ export default function App() {
   const [tab, setTab] = useState('Overview')
   const { model, connection, setCollection, supabase } = useProject()
   const settings = model.settings
+  const legalPage = window.location.pathname.replace(/\/$/, '')
+
+  if (legalPage === '/privacy') return <LegalPage page="privacy" />
+  if (legalPage === '/terms') return <LegalPage page="terms" />
 
   async function saveSettings(newSettings) {
     const safe = { ...newSettings, borrower: 'Josh Meyer' }
@@ -86,6 +91,11 @@ export default function App() {
           {tab === 'Settings'      && <SettingsTab settings={settings} onSave={saveSettings} />}
         </Suspense>
       </main>
+
+      <footer className="max-w-6xl mx-auto px-5 pb-8 flex gap-5 text-xs text-lbl3">
+        <a className="hover:text-lbl2" href="/privacy">Privacy</a>
+        <a className="hover:text-lbl2" href="/terms">Text Messaging Terms</a>
+      </footer>
 
       {/* ── Floating chat button (always visible) ── */}
       <ChatPanel />

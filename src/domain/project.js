@@ -23,6 +23,9 @@ export function createProjectModel(collections = {}, options = {}) {
     builder: DEFAULT_PROJECT.builder,
     loan_amount: '',
     loan_number: '',
+    project_email: 'Josh@3120jeffersonst.com',
+    daily_sms_enabled: 'true',
+    sms_timezone: 'America/Denver',
     ...settingsFromRows(collections.settings || []),
   }
   const projects = collections.projects || []

@@ -34,9 +34,9 @@ export const JEFFERSON_PHASES = [
   },
   {
     key: 'demolition', name: 'Demolition & Abatement', color: '#ff453a', tasks: [
-      task('disconnects', 'Utility disconnects and hazardous-material controls', 2, 'Abatement / Utilities', ['construction_start'], { references: 'A1.1' }),
-      task('abatement', 'Asbestos abatement and clearance', 10, 'Abatement', ['disconnects'], { references: 'A1.1' }),
-      task('selective_demo', 'Selective demolition - existing house & garage conversion', 10, 'Demolition', ['abatement'], { references: 'A1.1' }),
+      task('abatement', 'Asbestos abatement and clearance', 10, 'Abatement', ['construction_start'], { references: 'A1.1' }),
+      task('disconnects', 'Utility disconnects and hazardous-material controls', 2, 'Abatement / Utilities', ['abatement'], { references: 'A1.1' }),
+      task('selective_demo', 'Selective demolition - existing house & garage conversion', 10, 'Demolition', ['disconnects'], { references: 'A1.1' }),
       task('structural_demo', 'Structural deconstruction for addition tie-in', 5, 'Demolition / Framing', ['selective_demo'], { references: 'A1.1, S2.2' }),
       task('demo_cleanup', 'Debris haul-off and subgrade cleanup', 3, 'Demolition', ['structural_demo']),
     ],

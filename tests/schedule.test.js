@@ -29,6 +29,9 @@ test('permit schedule uses weekdays and valid finish-to-start dependencies', () 
   assert.equal(schedule.projectEnd, '2027-06-02')
 
   const byKey = new Map(schedule.tasks.map(item => [item.key, item]))
+  assert.deepEqual(byKey.get('abatement').dependsOn, ['construction_start'])
+  assert.deepEqual(byKey.get('disconnects').dependsOn, ['abatement'])
+  assert.deepEqual(byKey.get('selective_demo').dependsOn, ['disconnects'])
   for (const item of schedule.tasks) {
     assert.ok(isWorkday(item.start_date), `${item.key} starts on a weekend`)
     assert.ok(isWorkday(item.end_date), `${item.key} ends on a weekend`)

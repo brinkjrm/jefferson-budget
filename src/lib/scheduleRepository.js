@@ -16,6 +16,7 @@ export async function replaceScheduleWithBlueprint(supabase, schedule, existingR
       sort_order: phase.sort_order,
       color: phase.color,
       depends_on: [],
+      dependency_settings: {},
     }))
     const { data: insertedPhases, error: phaseError } = await supabase
       .from('schedule_tasks').insert(phasePayload).select()
@@ -31,6 +32,7 @@ export async function replaceScheduleWithBlueprint(supabase, schedule, existingR
       status: item.status,
       sort_order: item.sort_order,
       depends_on: [],
+      dependency_settings: {},
     }))
     const { data: insertedTasks, error: taskError } = await supabase
       .from('schedule_tasks').insert(taskPayload).select()
@@ -41,14 +43,16 @@ export async function replaceScheduleWithBlueprint(supabase, schedule, existingR
     const sourceByName = new Map(schedule.tasks.map(item => [item.name, item]))
     const dependencyPayload = insertedTasks.map(row => {
       const source = sourceByName.get(row.name)
+      const dependsOn = source.dependsOn.map(key => {
+        const predecessor = schedule.tasks.find(item => item.key === key)
+        const predecessorId = predecessor && idByName.get(predecessor.name)
+        if (!predecessorId) throw new Error(`Could not resolve dependency ${key} for ${row.name}`)
+        return predecessorId
+      })
       return {
         ...row,
-        depends_on: source.dependsOn.map(key => {
-          const predecessor = schedule.tasks.find(item => item.key === key)
-          const predecessorId = predecessor && idByName.get(predecessor.name)
-          if (!predecessorId) throw new Error(`Could not resolve dependency ${key} for ${row.name}`)
-          return predecessorId
-        }),
+        depends_on: dependsOn,
+        dependency_settings: Object.fromEntries(dependsOn.map(id => [id, { type: 'FS', lag: 0 }])),
         updated_at: new Date().toISOString(),
       }
     })

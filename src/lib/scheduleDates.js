@@ -102,8 +102,46 @@ export function shiftWorkdayRange(start, end, calendarDelta) {
   }
 }
 
-export function earliestDependencyStart(tasks, dependencyIds = []) {
+export const DEPENDENCY_TYPES = {
+  FS: { label: 'Finish to start', shortLabel: 'FS', description: 'The next task starts after this task finishes.' },
+  SS: { label: 'Start to start', shortLabel: 'SS', description: 'The next task starts after this task starts.' },
+  FF: { label: 'Finish to finish', shortLabel: 'FF', description: 'The next task finishes after this task finishes.' },
+  SF: { label: 'Start to finish', shortLabel: 'SF', description: 'The next task finishes after this task starts.' },
+}
+
+export function dependencySetting(task, predecessorId) {
+  const setting = task?.dependency_settings?.[predecessorId] || {}
+  const type = DEPENDENCY_TYPES[setting.type] ? setting.type : 'FS'
+  const lag = Number.isFinite(Number(setting.lag)) ? Math.trunc(Number(setting.lag)) : 0
+  return { type, lag }
+}
+
+export function dependencySettingsFor(task, predecessorIds = task?.depends_on || []) {
+  return Object.fromEntries(predecessorIds.map(id => [id, dependencySetting(task, id)]))
+}
+
+function dependencyConstraintStart(predecessor, successor) {
+  if (!predecessor || !successor) return null
+  const { type, lag } = dependencySetting(successor, predecessor.id)
+  const duration = Math.max(1, workdayDuration(successor.start_date, successor.end_date))
+  if (type === 'SS') return addWorkdays(predecessor.start_date, lag)
+  if (type === 'FF') return addWorkdays(addWorkdays(predecessor.end_date, lag), -(duration - 1))
+  if (type === 'SF') return addWorkdays(addWorkdays(predecessor.start_date, lag), -(duration - 1))
+  return addWorkdays(predecessor.end_date, lag + 1)
+}
+
+export function dependencyIsViolated(tasks, predecessorId, successorId) {
+  const predecessor = tasks.find(task => task.id === predecessorId)
+  const successor = tasks.find(task => task.id === successorId)
+  const minimumStart = dependencyConstraintStart(predecessor, successor)
+  return Boolean(minimumStart && (!successor?.start_date || parseDate(successor.start_date) < minimumStart))
+}
+
+export function earliestDependencyStart(tasks, dependencyIds = [], successor = null) {
   const byId = new Map(tasks.map(task => [task.id, task]))
+  if (successor) {
+    return maxDate(dependencyIds.map(id => dependencyConstraintStart(byId.get(id), successor)))
+  }
   const latestFinish = maxDate(dependencyIds.map(id => byId.get(id)?.end_date))
   return latestFinish ? nextWorkday(latestFinish) : null
 }
@@ -116,7 +154,7 @@ export function enforceDependencies(tasks, changedIds = []) {
   for (const id of changedIds) {
     const task = byId.get(id)
     if (!task?.parent_id) continue
-    const earliestStart = earliestDependencyStart([...byId.values()], task.depends_on)
+    const earliestStart = earliestDependencyStart([...byId.values()], task.depends_on, task)
     if (!earliestStart) continue
     if (!task.start_date || parseDate(task.start_date) < earliestStart) {
       const duration = Math.max(1, workdayDuration(task.start_date, task.end_date))
@@ -129,7 +167,7 @@ export function enforceDependencies(tasks, changedIds = []) {
     const predecessorId = queue.shift()
     for (const task of byId.values()) {
       if (!task.parent_id || !(task.depends_on || []).includes(predecessorId)) continue
-      const earliestStart = earliestDependencyStart([...byId.values()], task.depends_on)
+      const earliestStart = earliestDependencyStart([...byId.values()], task.depends_on, task)
       if (!earliestStart) continue
       if (!task.start_date || parseDate(task.start_date) < earliestStart) {
         const duration = Math.max(1, workdayDuration(task.start_date, task.end_date))
@@ -180,15 +218,69 @@ export function dependencyLinkError(tasks, predecessorId, successorId) {
   return hasDependencyCycle(candidate) ? 'That link would create a circular dependency.' : null
 }
 
-export function addDependencyLink(tasks, predecessorId, successorId) {
+export function addDependencyLink(tasks, predecessorId, successorId, setting = {}) {
   const error = dependencyLinkError(tasks, predecessorId, successorId)
   if (error) return { tasks, error }
+  const normalized = {
+    type: DEPENDENCY_TYPES[setting.type] ? setting.type : 'FS',
+    lag: Number.isFinite(Number(setting.lag)) ? Math.trunc(Number(setting.lag)) : 0,
+  }
   return {
     tasks: tasks.map(task => task.id === successorId
-      ? { ...task, depends_on: [...(task.depends_on || []), predecessorId] }
+      ? {
+        ...task,
+        depends_on: [...(task.depends_on || []), predecessorId],
+        dependency_settings: { ...(task.dependency_settings || {}), [predecessorId]: normalized },
+      }
       : { ...task }),
     error: null,
   }
+}
+
+export function updateDependencyLink(tasks, predecessorId, successorId, patch = {}) {
+  const successor = tasks.find(task => task.id === successorId)
+  if (!successor || !(successor.depends_on || []).includes(predecessorId)) {
+    return { tasks, error: 'That dependency no longer exists.' }
+  }
+  const current = dependencySetting(successor, predecessorId)
+  const setting = {
+    type: DEPENDENCY_TYPES[patch.type] ? patch.type : current.type,
+    lag: patch.lag === undefined ? current.lag : Math.trunc(Number(patch.lag) || 0),
+  }
+  return {
+    tasks: tasks.map(task => task.id === successorId
+      ? { ...task, dependency_settings: { ...(task.dependency_settings || {}), [predecessorId]: setting } }
+      : { ...task }),
+    error: null,
+  }
+}
+
+export function removeDependencyLink(tasks, predecessorId, successorId) {
+  const successor = tasks.find(task => task.id === successorId)
+  if (!successor || !(successor.depends_on || []).includes(predecessorId)) {
+    return { tasks, error: 'That dependency no longer exists.' }
+  }
+  return {
+    tasks: tasks.map(task => {
+      if (task.id !== successorId) return { ...task }
+      const dependencySettings = { ...(task.dependency_settings || {}) }
+      delete dependencySettings[predecessorId]
+      return {
+        ...task,
+        depends_on: (task.depends_on || []).filter(id => id !== predecessorId),
+        dependency_settings: dependencySettings,
+      }
+    }),
+    error: null,
+  }
+}
+
+export function reverseDependencyLink(tasks, predecessorId, successorId) {
+  const removed = removeDependencyLink(tasks, predecessorId, successorId)
+  if (removed.error) return removed
+  const reversed = addDependencyLink(removed.tasks, successorId, predecessorId)
+  if (reversed.error) return { tasks, error: reversed.error }
+  return reversed
 }
 
 export function rollupPhaseDates(tasks) {
@@ -211,6 +303,7 @@ export function sameScheduleTask(a, b) {
   const fields = ['name', 'parent_id', 'start_date', 'end_date', 'status', 'sort_order', 'color']
   return fields.every(field => a?.[field] === b?.[field])
     && JSON.stringify(a?.depends_on || []) === JSON.stringify(b?.depends_on || [])
+    && JSON.stringify(dependencySettingsFor(a)) === JSON.stringify(dependencySettingsFor(b))
 }
 
 export function changedScheduleRows(beforeTasks, afterTasks) {

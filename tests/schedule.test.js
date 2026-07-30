@@ -6,11 +6,16 @@ import {
   addWorkdays,
   applyTaskChange,
   changedScheduleRows,
+  dependencyIsViolated,
+  dependencySetting,
   earliestDependencyStart,
   enforceDependencies,
   hasDependencyCycle,
   isWorkday,
+  removeDependencyLink,
+  reverseDependencyLink,
   toDateString,
+  updateDependencyLink,
   workdayDuration,
 } from '../src/lib/scheduleDates.js'
 
@@ -103,4 +108,60 @@ test('drag-created dependencies reject duplicates and circular links', () => {
   const result = addDependencyLink(tasks, 'a', 'c')
   assert.equal(result.error, null)
   assert.deepEqual(result.tasks.find(task => task.id === 'c').depends_on, ['b', 'a'])
+})
+
+test('dependency links retain type and workday lag settings', () => {
+  const tasks = [
+    { id: 'a', parent_id: 'phase', start_date: '2026-08-03', end_date: '2026-08-07', depends_on: [] },
+    { id: 'b', parent_id: 'phase', start_date: '2026-08-10', end_date: '2026-08-12', depends_on: [] },
+  ]
+  const added = addDependencyLink(tasks, 'a', 'b', { type: 'SS', lag: 2 })
+  assert.deepEqual(dependencySetting(added.tasks.find(task => task.id === 'b'), 'a'), { type: 'SS', lag: 2 })
+  const updated = updateDependencyLink(added.tasks, 'a', 'b', { type: 'FS', lag: -1 })
+  assert.deepEqual(dependencySetting(updated.tasks.find(task => task.id === 'b'), 'a'), { type: 'FS', lag: -1 })
+  const removed = removeDependencyLink(updated.tasks, 'a', 'b')
+  assert.deepEqual(removed.tasks.find(task => task.id === 'b').depends_on, [])
+  assert.deepEqual(removed.tasks.find(task => task.id === 'b').dependency_settings, {})
+})
+
+test('finish-to-start lag and start-to-start links reschedule on workdays', () => {
+  const base = [
+    { id: 'a', parent_id: 'phase', start_date: '2026-08-03', end_date: '2026-08-07', depends_on: [] },
+    { id: 'b', parent_id: 'phase', start_date: '2026-08-10', end_date: '2026-08-12', depends_on: ['a'], dependency_settings: { a: { type: 'FS', lag: 2 } } },
+  ]
+  const finishToStart = enforceDependencies(base, ['b']).tasks.find(task => task.id === 'b')
+  assert.equal(finishToStart.start_date, '2026-08-12')
+  assert.equal(finishToStart.end_date, '2026-08-14')
+
+  const startToStartTasks = base.map(task => task.id === 'b'
+    ? { ...task, start_date: '2026-08-03', end_date: '2026-08-05', dependency_settings: { a: { type: 'SS', lag: 2 } } }
+    : task)
+  const startToStart = enforceDependencies(startToStartTasks, ['b']).tasks.find(task => task.id === 'b')
+  assert.equal(startToStart.start_date, '2026-08-05')
+  assert.equal(startToStart.end_date, '2026-08-07')
+})
+
+test('finish-to-finish relationships align task finishes', () => {
+  const tasks = [
+    { id: 'a', parent_id: 'phase', start_date: '2026-08-03', end_date: '2026-08-07', depends_on: [] },
+    { id: 'b', parent_id: 'phase', start_date: '2026-08-03', end_date: '2026-08-05', depends_on: ['a'], dependency_settings: { a: { type: 'FF', lag: 0 } } },
+  ]
+  assert.equal(dependencyIsViolated(tasks, 'a', 'b'), true)
+  const result = enforceDependencies(tasks, ['b']).tasks.find(task => task.id === 'b')
+  assert.equal(result.start_date, '2026-08-05')
+  assert.equal(result.end_date, '2026-08-07')
+  assert.equal(dependencyIsViolated([tasks[0], result], 'a', 'b'), false)
+})
+
+test('dependencies can be reversed without leaving stale settings', () => {
+  const tasks = [
+    { id: 'a', parent_id: 'phase', start_date: '2026-08-03', end_date: '2026-08-05', depends_on: [] },
+    { id: 'b', parent_id: 'phase', start_date: '2026-08-06', end_date: '2026-08-07', depends_on: ['a'], dependency_settings: { a: { type: 'FS', lag: 0 } } },
+  ]
+  const result = reverseDependencyLink(tasks, 'a', 'b')
+  assert.equal(result.error, null)
+  assert.deepEqual(result.tasks.find(task => task.id === 'b').depends_on, [])
+  assert.deepEqual(result.tasks.find(task => task.id === 'b').dependency_settings, {})
+  assert.deepEqual(result.tasks.find(task => task.id === 'a').depends_on, ['b'])
+  assert.deepEqual(dependencySetting(result.tasks.find(task => task.id === 'a'), 'b'), { type: 'FS', lag: 0 })
 })

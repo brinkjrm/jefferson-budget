@@ -2,13 +2,16 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useProjectCollection } from '../context/ProjectContext.jsx'
 import { buildJeffersonSchedule, getJeffersonTaskMetadata } from '../data/jeffersonSchedule.js'
 import {
+  DEPENDENCY_TYPES,
   addDependencyLink,
   addCalendarDays,
   addWorkdays,
   applyTaskChange,
   changedScheduleRows,
+  dependencyIsViolated,
   diffCalendarDays,
   dependencyLinkError,
+  dependencySetting,
   earliestDependencyStart,
   enforceDependencies,
   formatShortDate,
@@ -17,10 +20,13 @@ import {
   minDate,
   normalizeWorkday,
   parseDate,
+  removeDependencyLink,
+  reverseDependencyLink,
   rollupPhaseDates,
   shiftWorkdayRange,
   startOfWeek,
   toDateString,
+  updateDependencyLink,
   workdayDuration,
 } from '../lib/scheduleDates.js'
 import { replaceScheduleWithBlueprint } from '../lib/scheduleRepository.js'
@@ -28,7 +34,7 @@ import { supabase } from '../lib/supabase.js'
 
 const ROW_H = 48
 const HDR_H = 58
-const LIST_W = 420
+const LIST_W = 560
 const ZOOM_LEVELS = [28, 36, 48, 64, 96]
 const ZOOM_DEFAULT = 2
 
@@ -76,6 +82,14 @@ function csvCell(value) {
   return `"${String(value ?? '').replaceAll('"', '""')}"`
 }
 
+function cloneScheduleTasks(rows) {
+  return rows.map(task => ({
+    ...task,
+    depends_on: [...(task.depends_on || [])],
+    dependency_settings: JSON.parse(JSON.stringify(task.dependency_settings || {})),
+  }))
+}
+
 export default function ScheduleTab() {
   const [tasks, setTasks, loading, refreshTasks] = useProjectCollection('scheduleTasks')
   const [loadingTemplate, setLoadingTemplate] = useState(false)
@@ -89,6 +103,7 @@ export default function ScheduleTab() {
   const [hoveredId, setHoveredId] = useState(null)
   const [zoomIndex, setZoomIndex] = useState(ZOOM_DEFAULT)
   const [notice, setNotice] = useState(null)
+  const [undoSnapshot, setUndoSnapshot] = useState(null)
 
   const weekWidth = ZOOM_LEVELS[zoomIndex]
   const dayWidth = weekWidth / 7
@@ -116,7 +131,7 @@ export default function ScheduleTab() {
     }
   }
 
-  async function persistTasks(candidateTasks, changedIds, successText = 'Schedule saved', baselineTasks = tasksRef.current) {
+  async function persistTasks(candidateTasks, changedIds, successText = 'Schedule saved', baselineTasks = tasksRef.current, options = {}) {
     if (hasDependencyCycle(candidateTasks)) {
       setNotice({ type: 'error', text: 'Dependency cycle detected. Remove the circular predecessor before saving.' })
       await load()
@@ -142,6 +157,7 @@ export default function ScheduleTab() {
       sort_order: task.sort_order || 0,
       color: task.color || null,
       depends_on: task.depends_on || [],
+      dependency_settings: task.dependency_settings || {},
       updated_at: new Date().toISOString(),
     }))
     const { error } = await supabase.from('schedule_tasks').upsert(payload)
@@ -152,6 +168,9 @@ export default function ScheduleTab() {
     }
     tasksRef.current = rolled
     setTasks(rolled)
+    if (options.recordUndo !== false) {
+      setUndoSnapshot({ tasks: cloneScheduleTasks(baselineTasks), label: successText })
+    }
     setNotice({ type: 'success', text: successText })
     return true
   }
@@ -161,28 +180,58 @@ export default function ScheduleTab() {
     return persistTasks(candidate, [id], successText)
   }
 
-  async function createDependency(predecessorId, successorId) {
-    const result = addDependencyLink(tasksRef.current, predecessorId, successorId)
+  async function createDependency(predecessorId, successorId, setting = { type: 'FS', lag: 0 }) {
+    const result = addDependencyLink(tasksRef.current, predecessorId, successorId, setting)
     if (result.error) {
       setNotice({ type: 'error', text: result.error })
       return false
     }
     const predecessor = tasksRef.current.find(task => task.id === predecessorId)
     const successor = tasksRef.current.find(task => task.id === successorId)
-    const saved = await persistTasks(result.tasks, [successorId], `${successor.name.replace(/^INSPECTION - /, '')} now starts after ${predecessor.name.replace(/^INSPECTION - /, '')}`)
+    const relation = DEPENDENCY_TYPES[setting.type]?.label || DEPENDENCY_TYPES.FS.label
+    const saved = await persistTasks(result.tasks, [successorId], `${relation}: ${predecessor.name.replace(/^INSPECTION - /, '')} → ${successor.name.replace(/^INSPECTION - /, '')}`)
     if (saved) setSelectedDependency({ fromId: predecessorId, toId: successorId })
     return saved
   }
 
   async function removeDependency(predecessorId, successorId) {
-    const successor = tasksRef.current.find(task => task.id === successorId)
-    if (!successor) return false
-    const candidate = tasksRef.current.map(task => task.id === successorId
-      ? { ...task, depends_on: (task.depends_on || []).filter(id => id !== predecessorId) }
-      : task)
-    const saved = await persistTasks(candidate, [successorId], 'Dependency removed')
+    const result = removeDependencyLink(tasksRef.current, predecessorId, successorId)
+    if (result.error) {
+      setNotice({ type: 'error', text: result.error })
+      return false
+    }
+    const saved = await persistTasks(result.tasks, [successorId], 'Dependency removed')
     if (saved) setSelectedDependency(null)
     return saved
+  }
+
+  async function editDependency(predecessorId, successorId, patch) {
+    const result = updateDependencyLink(tasksRef.current, predecessorId, successorId, patch)
+    if (result.error) {
+      setNotice({ type: 'error', text: result.error })
+      return false
+    }
+    return persistTasks(result.tasks, [successorId], 'Dependency updated')
+  }
+
+  async function reverseDependency(predecessorId, successorId) {
+    const result = reverseDependencyLink(tasksRef.current, predecessorId, successorId)
+    if (result.error) {
+      setNotice({ type: 'error', text: result.error })
+      return false
+    }
+    const saved = await persistTasks(result.tasks, [predecessorId, successorId], 'Dependency direction reversed')
+    if (saved) setSelectedDependency({ fromId: successorId, toId: predecessorId })
+    return saved
+  }
+
+  async function undoLastChange() {
+    if (!undoSnapshot) return
+    const snapshot = undoSnapshot
+    setUndoSnapshot(null)
+    setSelectedDependency(null)
+    const saved = await persistTasks(snapshot.tasks, snapshot.tasks.map(task => task.id), `Undid: ${snapshot.label}`, tasksRef.current, { recordUndo: false })
+    if (!saved) setUndoSnapshot(snapshot)
   }
 
   useEffect(() => {
@@ -190,11 +239,16 @@ export default function ScheduleTab() {
     const onMove = event => {
       const calendarDelta = Math.round((event.clientX - drag.startX) / dayWidthRef.current)
       let range
-      if (drag.type === 'resize') {
+      if (drag.type === 'resize-end') {
         const rawEnd = addCalendarDays(drag.originalEnd, calendarDelta)
         const end = normalizeWorkday(rawEnd, calendarDelta < 0 ? -1 : 1)
         if (end < parseDate(drag.originalStart)) return
         range = { start_date: drag.originalStart, end_date: toDateString(end) }
+      } else if (drag.type === 'resize-start') {
+        const rawStart = addCalendarDays(drag.originalStart, calendarDelta)
+        const start = normalizeWorkday(rawStart, calendarDelta < 0 ? -1 : 1)
+        if (start > parseDate(drag.originalEnd)) return
+        range = { start_date: toDateString(start), end_date: drag.originalEnd }
       } else {
         range = shiftWorkdayRange(drag.originalStart, drag.originalEnd, calendarDelta)
       }
@@ -233,11 +287,21 @@ export default function ScheduleTab() {
       const row = flatListRef.current[rowIndex]
       const targetId = row && !row.isPhase ? row.task.id : null
       const error = targetId ? dependencyLinkError(tasksRef.current, linkDrag.sourceId, targetId) : 'Drop on a task row.'
+      const pointerX = Math.max(0, Math.min(event.clientX - rect.left, rect.width))
+      let targetTerminal = 'start'
+      if (targetId) {
+        const targetStartX = diffCalendarDays(linkDrag.timelineStart, row.task.start_date) * dayWidthRef.current
+        const targetEndX = diffCalendarDays(linkDrag.timelineStart, row.task.end_date) * dayWidthRef.current + dayWidthRef.current
+        targetTerminal = Math.abs(pointerX - targetStartX) <= Math.abs(pointerX - targetEndX) ? 'start' : 'end'
+      }
+      const type = `${linkDrag.sourceTerminal === 'start' ? 'S' : 'F'}${targetTerminal === 'start' ? 'S' : 'F'}`
       const next = {
         ...linkDragRef.current,
-        x: Math.max(0, Math.min(event.clientX - rect.left, rect.width)),
+        x: pointerX,
         y: Math.max(0, Math.min(event.clientY - rect.top, rect.height)),
         targetId,
+        targetTerminal,
+        type,
         valid: Boolean(targetId && !error),
         error,
       }
@@ -250,7 +314,7 @@ export default function ScheduleTab() {
       setLinkDrag(null)
       setHoveredId(null)
       if (current?.valid) {
-        await createDependency(current.sourceId, current.targetId)
+        await createDependency(current.sourceId, current.targetId, { type: current.type, lag: 0 })
       } else if (current?.targetId && current?.error) {
         setNotice({ type: 'error', text: current.error })
       }
@@ -377,7 +441,11 @@ export default function ScheduleTab() {
     const deletedIds = new Set([id, ...tasksRef.current.filter(task => task.parent_id === id).map(task => task.id)])
     const remaining = tasksRef.current
       .filter(task => !deletedIds.has(task.id))
-      .map(task => ({ ...task, depends_on: (task.depends_on || []).filter(depId => !deletedIds.has(depId)) }))
+      .map(task => {
+        const dependsOn = (task.depends_on || []).filter(depId => !deletedIds.has(depId))
+        const dependencySettings = Object.fromEntries(Object.entries(task.dependency_settings || {}).filter(([depId]) => !deletedIds.has(depId)))
+        return { ...task, depends_on: dependsOn, dependency_settings: dependencySettings }
+      })
     const dependencyChanges = remaining.filter(task => {
       const original = tasksRef.current.find(row => row.id === task.id)
       return JSON.stringify(task.depends_on) !== JSON.stringify(original.depends_on || [])
@@ -408,6 +476,7 @@ export default function ScheduleTab() {
       end_date: task.end_date || '',
       status: task.status || 'not_started',
       depends_on: task.depends_on || [],
+      dependency_settings: task.dependency_settings || {},
     })
   }
 
@@ -423,6 +492,7 @@ export default function ScheduleTab() {
       end_date: end,
       status: editFields.status,
       depends_on: isPhase ? [] : editFields.depends_on,
+      dependency_settings: isPhase ? {} : editFields.dependency_settings,
     }, 'Schedule item saved')
     if (saved) setEditingId(null)
   }
@@ -441,16 +511,22 @@ export default function ScheduleTab() {
     })
   }
 
-  function startLinkDrag(event, task) {
+  function startLinkDrag(event, task, sourceTerminal = 'end') {
     if (!task.parent_id) return
     event.preventDefault()
     event.stopPropagation()
     const sourceIndex = flatListRef.current.findIndex(row => row.task.id === task.id)
+    const sourceDate = sourceTerminal === 'start' ? task.start_date : task.end_date
+    const sourceX = diffCalendarDays(timelineStart, sourceDate) * dayWidth + (sourceTerminal === 'end' ? dayWidth : 0)
     const initial = {
       sourceId: task.id,
-      sourceX: diffCalendarDays(timelineStart, task.end_date) * dayWidth + dayWidth,
+      sourceTerminal,
+      targetTerminal: 'start',
+      type: sourceTerminal === 'start' ? 'SS' : 'FS',
+      timelineStart,
+      sourceX,
       sourceY: sourceIndex * ROW_H + ROW_H / 2,
-      x: diffCalendarDays(timelineStart, task.end_date) * dayWidth + dayWidth,
+      x: sourceX,
       y: sourceIndex * ROW_H + ROW_H / 2,
       targetId: null,
       valid: false,
@@ -506,6 +582,14 @@ export default function ScheduleTab() {
   const dependencyName = id => (tasks.find(task => task.id === id)?.name || '').replace(/^INSPECTION - /, '')
   const selectedPredecessor = selectedDependency && tasks.find(task => task.id === selectedDependency.fromId)
   const selectedSuccessor = selectedDependency && tasks.find(task => task.id === selectedDependency.toId)
+  const selectedSetting = selectedPredecessor && selectedSuccessor ? dependencySetting(selectedSuccessor, selectedPredecessor.id) : null
+  const selectedViolation = selectedPredecessor && selectedSuccessor ? dependencyIsViolated(tasks, selectedPredecessor.id, selectedSuccessor.id) : false
+
+  const dependencyText = (successor, predecessorId) => {
+    const setting = dependencySetting(successor, predecessorId)
+    const lag = setting.lag ? `${setting.lag > 0 ? '+' : ''}${setting.lag}d` : ''
+    return `${dependencyName(predecessorId)} (${setting.type}${lag ? ` ${lag}` : ''})`
+  }
 
   function exportCsv() {
     const header = ['Phase', 'Task', 'Trade', 'Type', 'Start', 'Finish', 'Workdays', 'Predecessors', 'Plan references', 'Notes']
@@ -518,7 +602,7 @@ export default function ScheduleTab() {
           phase.name, item.name.replace(/^INSPECTION - /, ''), metadata.trade,
           TYPE_MAP[metadata.type]?.label || 'Work', item.start_date, item.end_date,
           workdayDuration(item.start_date, item.end_date),
-          (item.depends_on || []).map(dependencyName).join('; '), metadata.references, metadata.notes,
+          (item.depends_on || []).map(id => dependencyText(item, id)).join('; '), metadata.references, metadata.notes,
         ]
       }))
     const csv = [header, ...rows].map(row => row.map(csvCell).join(',')).join('\n')
@@ -557,6 +641,7 @@ export default function ScheduleTab() {
           </button>
           <button onClick={exportCsv} className="btn-secondary text-xs px-3 py-2">Export CSV</button>
           <button onClick={() => window.print()} className="btn-secondary text-xs px-3 py-2">Print / Save PDF</button>
+          {undoSnapshot && <button onClick={undoLastChange} className="btn-secondary text-xs px-3 py-2" title={undoSnapshot.label}>↶ Undo</button>}
           <span className="text-lbl3 text-xs hidden xl:inline">Monday-Friday calendar · successors move automatically.</span>
           <div className="ml-auto flex items-center gap-1">
             <span className="text-lbl3 text-xs mr-1">Zoom</span>
@@ -578,26 +663,29 @@ export default function ScheduleTab() {
           <span style={{ color: '#0a84ff', fontWeight: 700 }}>Quick edit</span>
           <span className="text-lbl3">Drag a bar to move it</span>
           <span className="text-lbl3">·</span>
-          <span className="text-lbl3">Drag its right edge to change duration</span>
+          <span className="text-lbl3">Drag either edge to resize it</span>
           <span className="text-lbl3">·</span>
-          <span className="text-lbl3">Drag the gold dot to another task to link them</span>
+          <span className="text-lbl3">Drag a gold endpoint to another task to link them</span>
         </div>
 
-        {selectedPredecessor && selectedSuccessor && (
-          <div className="no-print flex items-center gap-2 mb-3 rounded-lg px-3 py-2 text-xs" style={{ background: 'rgba(255,179,64,0.10)', border: '1px solid rgba(255,179,64,0.24)' }}>
-            <span style={{ color: '#ffb340', fontWeight: 700 }}>Selected dependency</span>
-            <span className="text-white truncate">{selectedPredecessor.name.replace(/^INSPECTION - /, '')} → {selectedSuccessor.name.replace(/^INSPECTION - /, '')}</span>
-            <div className="flex-1" />
-            <button onClick={() => removeDependency(selectedDependency.fromId, selectedDependency.toId)} className="text-neg font-semibold flex-shrink-0">Remove link</button>
-            <button onClick={() => setSelectedDependency(null)} className="text-lbl3 text-base leading-none flex-shrink-0" title="Close">×</button>
-          </div>
-        )}
+        {selectedPredecessor && selectedSuccessor && <DependencyEditor
+          predecessor={selectedPredecessor}
+          successor={selectedSuccessor}
+          setting={selectedSetting}
+          violated={selectedViolation}
+          onUpdate={patch => editDependency(selectedPredecessor.id, selectedSuccessor.id, patch)}
+          onReverse={() => reverseDependency(selectedPredecessor.id, selectedSuccessor.id)}
+          onRemove={() => removeDependency(selectedPredecessor.id, selectedSuccessor.id)}
+          onClose={() => setSelectedDependency(null)}
+        />}
 
         <div ref={ganttScrollRef} className="apple-card schedule-gantt" style={{ overflow: 'auto', maxHeight: '70vh' }}>
           <div style={{ minWidth: LIST_W + timelineWidth }}>
             <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 20, height: HDR_H, background: '#1c1c1e', borderBottom: '1px solid rgba(84,84,88,0.4)' }}>
-              <div style={{ width: LIST_W, minWidth: LIST_W, position: 'sticky', left: 0, zIndex: 30, background: '#1c1c1e', display: 'flex', alignItems: 'flex-end', padding: '0 16px 10px', borderRight: '1px solid rgba(84,84,88,0.3)' }}>
-                <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#8e8e93' }}>Phases, tasks & responsible trade</span>
+              <div style={{ width: LIST_W, minWidth: LIST_W, position: 'sticky', left: 0, zIndex: 30, background: '#1c1c1e', display: 'flex', alignItems: 'flex-end', padding: '0 10px 10px 16px', borderRight: '1px solid rgba(84,84,88,0.3)', gap: 8 }}>
+                <span style={{ flex: 1, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#8e8e93' }}>Activity & predecessor</span>
+                <span style={{ width: 66, fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#8e8e93' }}>Start</span>
+                <span style={{ width: 66, fontSize: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#8e8e93' }}>Finish</span>
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', height: 29 }}>
@@ -622,7 +710,7 @@ export default function ScheduleTab() {
               <div style={{ width: LIST_W, minWidth: LIST_W, position: 'sticky', left: 0, zIndex: 10, background: '#1c1c1e', borderRight: '1px solid rgba(84,84,88,0.3)' }}>
                 {flatList.map(({ task, depth, isPhase, phaseColor }, flatIndex) => {
                   const metadata = getJeffersonTaskMetadata(task.name)
-                  const predecessors = (task.depends_on || []).map(dependencyName).filter(Boolean)
+                  const predecessors = (task.depends_on || []).map(id => dependencyText(task, id)).filter(Boolean)
                   const isDragging = reorder?.taskId === task.id
                   const isNestTarget = reorder && !reorder.isPhase && isPhase && reorder.targetFlatIndex === flatIndex && reorder.taskId !== task.id
                   const isReorderTarget = reorder && reorder.targetFlatIndex === flatIndex && reorder.taskId !== task.id && !isNestTarget
@@ -650,6 +738,9 @@ export default function ScheduleTab() {
                           </span>
                         </div>}
                       </div>
+                      {!isPhase && <button onClick={() => openEdit(task)} title="Edit start date" style={{ width: 62, flexShrink: 0, color: '#ebebf5', fontSize: 10, textAlign: 'left', fontVariantNumeric: 'tabular-nums' }}>{formatShortDate(task.start_date)}</button>}
+                      {!isPhase && <button onClick={() => openEdit(task)} title="Edit finish date" style={{ width: 62, flexShrink: 0, color: '#ebebf5', fontSize: 10, textAlign: 'left', fontVariantNumeric: 'tabular-nums' }}>{formatShortDate(task.end_date)}</button>}
+                      {isPhase && <span style={{ width: 132, flexShrink: 0, color: '#8e8e93', fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>{formatShortDate(task.start_date)} – {formatShortDate(task.end_date)}</span>}
                       <span style={{ color: STATUS_MAP[task.status]?.color || '#8E8E93', fontSize: 9, flexShrink: 0 }}>●</span>
                       {isPhase && <button onClick={event => { event.stopPropagation(); addTask(task.id) }} style={{ fontSize: 14, fontWeight: 700, color: '#0a84ff', flexShrink: 0, opacity: hoveredId === task.id ? 1 : 0, width: 18 }} title="Add task">+</button>}
                       <button onClick={event => { event.stopPropagation(); deleteTask(task.id) }} style={{ color: '#ff453a', fontSize: 14, width: 18, flexShrink: 0, opacity: hoveredId === task.id ? 1 : 0 }} title="Delete">×</button>
@@ -684,11 +775,13 @@ export default function ScheduleTab() {
                   const top = index * ROW_H + (ROW_H - barHeight) / 2
                   const showLinkHandles = !isPhase && (hoveredId === task.id || Boolean(linkDrag))
                   const isLinkTarget = linkDrag?.targetId === task.id
+                  const startHandleColor = isLinkTarget && linkDrag?.targetTerminal === 'start' ? (linkDrag.valid ? '#30d158' : '#ff453a') : '#ffb340'
+                  const endHandleColor = isLinkTarget && linkDrag?.targetTerminal === 'end' ? (linkDrag.valid ? '#30d158' : '#ff453a') : '#ffb340'
                   if (isInspection && !isPhase) {
                     return <div key={task.id} data-gantt-task-id={task.id} onMouseEnter={() => setHoveredId(task.id)} onMouseLeave={() => !linkDrag && setHoveredId(null)} style={{ position: 'absolute', top: top + 3, left: left - 1, width: 14, height: 14, zIndex: 5 }}>
                       <div onMouseDown={event => startBarDrag(event, task, 'move')} title={`${task.name}: ${formatShortDate(task.start_date)}`} style={{ position: 'absolute', inset: 0, background: baseColor, border: '2px solid #1c1c1e', transform: 'rotate(45deg)', borderRadius: 2, cursor: 'grab' }} />
-                      {showLinkHandles && <span style={{ position: 'absolute', left: -11, top: 3, width: 8, height: 8, borderRadius: '50%', background: isLinkTarget ? (linkDrag.valid ? '#30d158' : '#ff453a') : '#ffb340', border: '2px solid #1c1c1e', pointerEvents: 'none' }} />}
-                      <button type="button" aria-label={`Create dependency after ${task.name}`} title="Drag to the task that should happen next" onMouseDown={event => startLinkDrag(event, task)} style={{ position: 'absolute', right: -13, top: 1, width: 12, height: 12, borderRadius: '50%', background: '#ffb340', border: '2px solid #1c1c1e', cursor: 'crosshair', zIndex: 9, opacity: hoveredId === task.id || linkDrag?.sourceId === task.id ? 1 : 0.28, transition: 'opacity 120ms ease' }} />
+                      <button type="button" aria-label={`Create start dependency from ${task.name}`} title="Drag from task start" onMouseDown={event => startLinkDrag(event, task, 'start')} style={{ position: 'absolute', left: -13, top: 1, width: 12, height: 12, borderRadius: '50%', background: startHandleColor, border: '2px solid #1c1c1e', cursor: 'crosshair', zIndex: 9, opacity: showLinkHandles ? 1 : 0.28, transition: 'opacity 120ms ease' }} />
+                      <button type="button" aria-label={`Create finish dependency from ${task.name}`} title="Drag from task finish" onMouseDown={event => startLinkDrag(event, task, 'end')} style={{ position: 'absolute', right: -13, top: 1, width: 12, height: 12, borderRadius: '50%', background: endHandleColor, border: '2px solid #1c1c1e', cursor: 'crosshair', zIndex: 9, opacity: showLinkHandles ? 1 : 0.28, transition: 'opacity 120ms ease' }} />
                     </div>
                   }
                   return (
@@ -701,9 +794,10 @@ export default function ScheduleTab() {
                         display: 'flex', alignItems: 'center', overflow: 'visible', zIndex: 2,
                       }}>
                         {width > (isPhase ? 72 : 64) && <span style={{ width: '100%', fontSize: isPhase ? 12 : 10, fontWeight: isPhase ? 700 : 600, color: isPhase ? '#fff' : baseColor, padding: '0 9px 0 7px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none' }}>{task.name.replace(/^INSPECTION - /, '')}</span>}
-                        {!isPhase && <div title="Drag to change duration" onMouseDown={event => startBarDrag(event, task, 'resize')} style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 7, cursor: 'ew-resize', background: 'rgba(0,0,0,0.18)', borderRadius: '0 5px 5px 0', zIndex: 6 }} />}
-                        {showLinkHandles && !isPhase && <span style={{ position: 'absolute', left: -10, top: '50%', width: 9, height: 9, marginTop: -4.5, borderRadius: '50%', background: isLinkTarget ? (linkDrag.valid ? '#30d158' : '#ff453a') : '#ffb340', border: '2px solid #1c1c1e', pointerEvents: 'none', zIndex: 8 }} />}
-                        {!isPhase && <button type="button" aria-label={`Create dependency after ${task.name}`} title="Drag to the task that should happen next" onMouseDown={event => startLinkDrag(event, task)} style={{ position: 'absolute', right: -13, top: '50%', width: 12, height: 12, marginTop: -6, borderRadius: '50%', background: '#ffb340', border: '2px solid #1c1c1e', cursor: 'crosshair', zIndex: 9, opacity: hoveredId === task.id || linkDrag?.sourceId === task.id ? 1 : 0.28, transition: 'opacity 120ms ease' }} />}
+                        {!isPhase && <div title="Drag to change start date" onMouseDown={event => startBarDrag(event, task, 'resize-start')} style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 7, cursor: 'ew-resize', background: 'rgba(0,0,0,0.18)', borderRadius: '5px 0 0 5px', zIndex: 6 }} />}
+                        {!isPhase && <div title="Drag to change finish date" onMouseDown={event => startBarDrag(event, task, 'resize-end')} style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 7, cursor: 'ew-resize', background: 'rgba(0,0,0,0.18)', borderRadius: '0 5px 5px 0', zIndex: 6 }} />}
+                        {!isPhase && <button type="button" aria-label={`Create start dependency from ${task.name}`} title="Drag from task start" onMouseDown={event => startLinkDrag(event, task, 'start')} style={{ position: 'absolute', left: -13, top: '50%', width: 12, height: 12, marginTop: -6, borderRadius: '50%', background: startHandleColor, border: '2px solid #1c1c1e', cursor: 'crosshair', zIndex: 9, opacity: showLinkHandles ? 1 : 0.28, transition: 'opacity 120ms ease' }} />}
+                        {!isPhase && <button type="button" aria-label={`Create finish dependency from ${task.name}`} title="Drag from task finish" onMouseDown={event => startLinkDrag(event, task, 'end')} style={{ position: 'absolute', right: -13, top: '50%', width: 12, height: 12, marginTop: -6, borderRadius: '50%', background: endHandleColor, border: '2px solid #1c1c1e', cursor: 'crosshair', zIndex: 9, opacity: showLinkHandles ? 1 : 0.28, transition: 'opacity 120ms ease' }} />}
                         {drag?.taskId === task.id && <span style={{ position: 'absolute', left: '50%', top: -27, transform: 'translateX(-50%)', padding: '3px 7px', borderRadius: 6, background: '#2c2c2e', border: '1px solid rgba(255,255,255,0.16)', color: '#fff', fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 10 }}>{formatShortDate(task.start_date)} → {formatShortDate(task.end_date)}</span>}
                       </div>
                     </div>
@@ -726,6 +820,52 @@ export default function ScheduleTab() {
   )
 }
 
+function DependencyEditor({ predecessor, successor, setting, violated, onUpdate, onReverse, onRemove, onClose }) {
+  const [lag, setLag] = useState(setting?.lag || 0)
+  useEffect(() => setLag(setting?.lag || 0), [setting?.lag])
+  const type = setting?.type || 'FS'
+  const predecessorEvent = type[0] === 'S' ? 'starts' : 'finishes'
+  const successorEvent = type[1] === 'S' ? 'start' : 'finish'
+  const cleanName = task => task.name.replace(/^INSPECTION - /, '')
+  const commitLag = () => {
+    const normalized = Math.trunc(Number(lag) || 0)
+    setLag(normalized)
+    if (normalized !== setting?.lag) onUpdate({ lag: normalized })
+  }
+  return (
+    <div className="no-print mb-3 rounded-xl px-4 py-3" style={{ background: violated ? 'rgba(255,69,58,0.10)' : 'rgba(255,179,64,0.10)', border: `1px solid ${violated ? 'rgba(255,69,58,0.42)' : 'rgba(255,179,64,0.26)'}` }}>
+      <div className="flex items-start gap-3 flex-wrap">
+        <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+          <div className="flex items-center gap-2 mb-1">
+            <span style={{ color: violated ? '#ff453a' : '#ffb340', fontWeight: 800, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{violated ? 'Scheduling conflict' : 'Selected dependency'}</span>
+            <span className="rounded px-1.5 py-0.5" style={{ color: '#ffb340', background: 'rgba(255,179,64,0.14)', fontSize: 10, fontWeight: 800 }}>{type}</span>
+          </div>
+          <div className="text-white truncate" style={{ fontSize: 13, fontWeight: 650 }}>{cleanName(predecessor)} <span style={{ color: '#ffb340' }}>→</span> {cleanName(successor)}</div>
+          <p className="text-lbl3 mt-1" style={{ fontSize: 11 }}>When <strong className="text-white">{cleanName(predecessor)}</strong> {predecessorEvent}, <strong className="text-white">{cleanName(successor)}</strong> may {successorEvent}{setting?.lag ? ` ${Math.abs(setting.lag)} workday${Math.abs(setting.lag) === 1 ? '' : 's'} ${setting.lag > 0 ? 'later' : 'earlier'}` : ''}.</p>
+          {violated && <p style={{ color: '#ff6961', fontSize: 11, marginTop: 5, fontWeight: 650 }}>The dates do not satisfy this relationship. Save an edit or change the relationship to reschedule it.</p>}
+        </div>
+        <label className="text-lbl3" style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Relationship
+          <select value={type} onChange={event => onUpdate({ type: event.target.value })} className="apple-input block mt-1 text-xs" style={{ width: 148, textTransform: 'none', letterSpacing: 0 }}>
+            {Object.entries(DEPENDENCY_TYPES).map(([key, value]) => <option key={key} value={key}>{key} · {value.label}</option>)}
+          </select>
+        </label>
+        <label className="text-lbl3" style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Lead / lag
+          <div className="flex items-center gap-1 mt-1">
+            <input type="number" value={lag} onChange={event => setLag(event.target.value)} onBlur={commitLag} onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }} className="apple-input text-xs" style={{ width: 68, textTransform: 'none', letterSpacing: 0 }} />
+            <span className="text-lbl3" style={{ fontSize: 10, textTransform: 'none', letterSpacing: 0 }}>workdays</span>
+          </div>
+        </label>
+        <button onClick={onClose} className="text-lbl3 text-lg leading-none" title="Close">×</button>
+      </div>
+      <div className="flex items-center gap-3 mt-3 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+        <button onClick={onReverse} style={{ color: '#0a84ff', fontSize: 11, fontWeight: 750 }}>⇄ Reverse direction</button>
+        <button onClick={onRemove} style={{ color: '#ff6961', fontSize: 11, fontWeight: 750 }}>Remove dependency</button>
+        <span className="text-lbl3 ml-auto" style={{ fontSize: 10 }}>Negative days overlap tasks; positive days add a gap.</span>
+      </div>
+    </div>
+  )
+}
+
 function SummaryCard({ label, value, detail }) {
   return <div className="apple-card px-4 py-3"><div className="text-lbl3 uppercase tracking-wider" style={{ fontSize: 10, fontWeight: 700 }}>{label}</div><div className="text-white font-semibold mt-1" style={{ fontSize: 17 }}>{value}</div>{detail && <div className="text-lbl3 mt-0.5" style={{ fontSize: 10 }}>{detail}</div>}</div>
 }
@@ -735,10 +875,11 @@ function Legend({ color, label, diamond }) {
 }
 
 function DependencyLegend() {
-  return <span className="flex items-center gap-1.5"><span style={{ color: '#ffb340', fontWeight: 700, letterSpacing: -1 }}>—›</span>Predecessor → successor</span>
+  return <><span className="flex items-center gap-1.5"><span style={{ color: '#ffb340', fontWeight: 700, letterSpacing: -1 }}>—›</span>Predecessor → successor</span><span className="flex items-center gap-1.5"><span style={{ color: '#ff453a', fontWeight: 700, letterSpacing: -1 }}>—›</span>Date conflict</span></>
 }
 
 function DependencyArrows({ flatList, timelineStart, bodyHeight, timelineWidth, dayWidth, activeTaskId, selectedDependency, onSelect }) {
+  const allTasks = flatList.map(row => row.task)
   const arrows = []
   flatList.forEach(({ task }, toIndex) => {
     ;(task.depends_on || []).forEach(dependencyId => {
@@ -746,14 +887,19 @@ function DependencyArrows({ flatList, timelineStart, bodyHeight, timelineWidth, 
       if (fromIndex === -1) return
       const fromTask = flatList[fromIndex].task
       if (!fromTask.end_date || !task.start_date) return
+      const setting = dependencySetting(task, dependencyId)
+      const sourceDate = setting.type[0] === 'S' ? fromTask.start_date : fromTask.end_date
+      const targetDate = setting.type[1] === 'S' ? task.start_date : task.end_date
+      const lag = setting.lag ? `${setting.lag > 0 ? '+' : ''}${setting.lag} workday${Math.abs(setting.lag) === 1 ? '' : 's'}` : 'no lag'
       arrows.push({
-        x1: diffCalendarDays(timelineStart, fromTask.end_date) * dayWidth + dayWidth,
+        x1: diffCalendarDays(timelineStart, sourceDate) * dayWidth + (setting.type[0] === 'F' ? dayWidth : 0),
         y1: fromIndex * ROW_H + ROW_H / 2,
-        x2: diffCalendarDays(timelineStart, task.start_date) * dayWidth,
+        x2: diffCalendarDays(timelineStart, targetDate) * dayWidth + (setting.type[1] === 'F' ? dayWidth : 0),
         y2: toIndex * ROW_H + ROW_H / 2,
         fromId: dependencyId,
         toId: task.id,
-        label: `${fromTask.name.replace(/^INSPECTION - /, '')} → ${task.name.replace(/^INSPECTION - /, '')}`,
+        label: `${setting.type}: ${fromTask.name.replace(/^INSPECTION - /, '')} → ${task.name.replace(/^INSPECTION - /, '')} (${lag})`,
+        violated: dependencyIsViolated(allTasks, dependencyId, task.id),
         key: `${dependencyId}-${task.id}`,
       })
     })
@@ -764,20 +910,23 @@ function DependencyArrows({ flatList, timelineStart, bodyHeight, timelineWidth, 
       <defs>
         <marker id="dependency-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#ffb340" /></marker>
         <marker id="dependency-arrow-muted" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="rgba(255,179,64,0.5)" /></marker>
+        <marker id="dependency-arrow-error" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#ff453a" /></marker>
       </defs>
-      {arrows.map(({ x1, y1, x2, y2, fromId, toId, label, key }) => {
+      {arrows.map(({ x1, y1, x2, y2, fromId, toId, label, violated, key }) => {
         const selected = selectedDependency?.fromId === fromId && selectedDependency?.toId === toId
         const active = selected || Boolean(activeTaskId && (activeTaskId === fromId || activeTaskId === toId))
-        const opacity = active ? 1 : activeTaskId ? 0.1 : 0.3
+        const opacity = violated || active ? 1 : activeTaskId ? 0.1 : 0.3
+        const stroke = violated ? '#ff453a' : active ? '#ffb340' : 'rgba(255,179,64,0.5)'
+        const marker = violated ? 'url(#dependency-arrow-error)' : active ? 'url(#dependency-arrow)' : 'url(#dependency-arrow-muted)'
         const elbowX = Math.max(x1 + 12, x2 - 10)
         const path = x2 > x1 + 8
           ? `M${x1},${y1} L${elbowX},${y1} L${elbowX},${y2} L${x2},${y2}`
           : `M${x1},${y1} L${x1 + 12},${y1} L${x1 + 12},${(y1 + y2) / 2} L${x2 - 12},${(y1 + y2) / 2} L${x2 - 12},${y2} L${x2},${y2}`
         return <g key={key} opacity={opacity}>
           <title>{label}</title>
-          <circle cx={x1} cy={y1} r={active ? 2.5 : 2} fill={active ? '#ffb340' : 'rgba(255,179,64,0.5)'} />
+          <circle cx={x1} cy={y1} r={active || violated ? 2.5 : 2} fill={stroke} />
           <path d={path} fill="none" stroke="transparent" strokeWidth="14" pointerEvents="stroke" style={{ cursor: 'pointer' }} onClick={() => onSelect({ fromId, toId })} />
-          <path d={path} fill="none" stroke={active ? '#ffb340' : 'rgba(255,179,64,0.5)'} strokeWidth={selected ? 2.6 : active ? 1.8 : 1.1} markerEnd={active ? 'url(#dependency-arrow)' : 'url(#dependency-arrow-muted)'} pointerEvents="none" />
+          <path d={path} fill="none" stroke={stroke} strokeWidth={selected ? 2.6 : active || violated ? 1.8 : 1.1} markerEnd={marker} pointerEvents="none" />
         </g>
       })}
     </svg>
@@ -794,7 +943,7 @@ function DependencyDraft({ linkDrag }) {
       <circle cx={linkDrag.x} cy={linkDrag.y} r="5" fill={color} stroke="#1c1c1e" strokeWidth="2" />
     </svg>
     <div style={{ position: 'absolute', left: linkDrag.x + 10, top: Math.max(4, linkDrag.y - 28), padding: '4px 7px', borderRadius: 6, background: '#2c2c2e', border: `1px solid ${color}`, color, fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 13 }}>
-      {linkDrag.valid ? 'Release to create dependency' : linkDrag.error}
+      {linkDrag.valid ? `${linkDrag.type} · Release to link` : linkDrag.error}
     </div>
   </>
 }
@@ -802,14 +951,24 @@ function DependencyDraft({ linkDrag }) {
 function EditModal({ task, fields, setFields, tasks, isPhase, onSave, onCancel, onDelete, onAddTask }) {
   const [dependencyFilter, setDependencyFilter] = useState('')
   const set = key => event => setFields(previous => ({ ...previous, [key]: event.target.value }))
-  const toggleDependency = (id, checked) => setFields(previous => ({
+  const toggleDependency = (id, checked) => setFields(previous => {
+    const dependencySettings = { ...(previous.dependency_settings || {}) }
+    if (checked) dependencySettings[id] = dependencySettings[id] || { type: 'FS', lag: 0 }
+    else delete dependencySettings[id]
+    return {
+      ...previous,
+      depends_on: checked ? [...new Set([...(previous.depends_on || []), id])] : (previous.depends_on || []).filter(value => value !== id),
+      dependency_settings: dependencySettings,
+    }
+  })
+  const setDependencyType = (id, type) => setFields(previous => ({
     ...previous,
-    depends_on: checked ? [...new Set([...(previous.depends_on || []), id])] : (previous.depends_on || []).filter(value => value !== id),
+    dependency_settings: { ...(previous.dependency_settings || {}), [id]: { ...dependencySetting(previous, id), type } },
   }))
   const filter = dependencyFilter.trim().toLowerCase()
   const phaseById = new Map(tasks.filter(item => !item.parent_id).map(item => [item.id, item]))
   const selected = (fields.depends_on || []).map(id => tasks.find(item => item.id === id)).filter(Boolean)
-  const earliestStart = earliestDependencyStart(tasks, fields.depends_on)
+  const earliestStart = earliestDependencyStart(tasks, fields.depends_on, { ...task, ...fields })
   const candidates = tasks
     .filter(item => item.parent_id && item.id !== task.id && !(fields.depends_on || []).includes(item.id))
     .map(item => {
@@ -840,15 +999,17 @@ function EditModal({ task, fields, setFields, tasks, isPhase, onSave, onCancel, 
           <div>
             <div className="flex items-start justify-between gap-4 mb-2">
               <div>
-                <div className="text-white font-semibold" style={{ fontSize: 13 }}>This task starts after</div>
-                <p className="text-lbl3 mt-0.5" style={{ fontSize: 10 }}>Finish-to-start rule: the task begins on the next working day after every selected predecessor is complete.</p>
+                <div className="text-white font-semibold" style={{ fontSize: 13 }}>This task is controlled by</div>
+                <p className="text-lbl3 mt-0.5" style={{ fontSize: 10 }}>Select predecessor tasks and the relationship that controls this task. Dates use a Monday–Friday calendar.</p>
               </div>
               {earliestStart && <div className="text-right flex-shrink-0"><div className="text-lbl3 uppercase tracking-wider" style={{ fontSize: 9 }}>Earliest start</div><div style={{ color: '#ffb340', fontSize: 12, fontWeight: 700 }}>{formatShortDate(earliestStart, { includeYear: true })}</div></div>}
             </div>
             <div className="flex flex-wrap gap-2 mb-3 min-h-7">
-              {selected.map(item => <button key={item.id} type="button" onClick={() => toggleDependency(item.id, false)} title="Remove predecessor" className="flex items-center gap-1.5 text-xs rounded-md px-2 py-1" style={{ color: '#ffb340', background: 'rgba(255,179,64,0.12)', border: '1px solid rgba(255,179,64,0.28)' }}>
-                <span>↳ {item.name.replace(/^INSPECTION - /, '')}</span><span style={{ color: '#8e8e93' }}>{formatShortDate(item.end_date)}</span><span aria-hidden="true">×</span>
-              </button>)}
+              {selected.map(item => <div key={item.id} className="flex items-center gap-1.5 text-xs rounded-md px-2 py-1" style={{ color: '#ffb340', background: 'rgba(255,179,64,0.12)', border: '1px solid rgba(255,179,64,0.28)' }}>
+                <span>↳ {item.name.replace(/^INSPECTION - /, '')}</span>
+                <select value={dependencySetting(fields, item.id).type} onChange={event => setDependencyType(item.id, event.target.value)} title="Dependency type" style={{ color: '#ffb340', background: '#252527', border: '1px solid rgba(255,179,64,0.25)', borderRadius: 4, fontSize: 10, padding: '1px 3px' }}>{Object.keys(DEPENDENCY_TYPES).map(type => <option key={type} value={type}>{type}</option>)}</select>
+                <button type="button" onClick={() => toggleDependency(item.id, false)} title="Remove predecessor" aria-label={`Remove ${item.name}`} style={{ color: '#ff6961', fontWeight: 800 }}>×</button>
+              </div>)}
               {!selected.length && <span className="text-lbl3 text-xs italic">No predecessor — this task may start independently.</span>}
             </div>
             <div className="text-lbl3 uppercase tracking-wider font-semibold mb-1.5" style={{ fontSize: 10 }}>Add a predecessor</div>
@@ -872,6 +1033,11 @@ function EditModal({ task, fields, setFields, tasks, isPhase, onSave, onCancel, 
 
 function PrintableSchedule({ phases, tasks, projectStart, projectEnd }) {
   const nameFor = id => tasks.find(task => task.id === id)?.name.replace(/^INSPECTION - /, '') || ''
+  const dependencyFor = (task, id) => {
+    const setting = dependencySetting(task, id)
+    const lag = setting.lag ? `${setting.lag > 0 ? '+' : ''}${setting.lag}d` : ''
+    return `${nameFor(id)} (${setting.type}${lag ? ` ${lag}` : ''})`
+  }
   return (
     <div className="schedule-print">
       <div className="print-header">
@@ -885,7 +1051,7 @@ function PrintableSchedule({ phases, tasks, projectStart, projectEnd }) {
           <table><thead><tr><th>Activity</th><th>Trade</th><th>Start</th><th>Finish</th><th>Days</th><th>Predecessor(s)</th><th>Plan Ref.</th></tr></thead>
             <tbody>{tasks.filter(task => task.parent_id === phase.id).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map(item => {
               const metadata = getJeffersonTaskMetadata(item.name)
-              return <tr key={item.id} className={metadata.type === 'inspection' ? 'inspection-row' : ''}><td>{item.name.replace(/^INSPECTION - /, '')}{metadata.type === 'inspection' && <strong className="inspection-label"> HOLD POINT</strong>}</td><td>{metadata.trade || 'Unassigned'}</td><td>{formatShortDate(item.start_date, { includeYear: true })}</td><td>{formatShortDate(item.end_date, { includeYear: true })}</td><td>{workdayDuration(item.start_date, item.end_date)}</td><td>{(item.depends_on || []).map(nameFor).join('; ') || '-'}</td><td>{metadata.references || '-'}</td></tr>
+              return <tr key={item.id} className={metadata.type === 'inspection' ? 'inspection-row' : ''}><td>{item.name.replace(/^INSPECTION - /, '')}{metadata.type === 'inspection' && <strong className="inspection-label"> HOLD POINT</strong>}</td><td>{metadata.trade || 'Unassigned'}</td><td>{formatShortDate(item.start_date, { includeYear: true })}</td><td>{formatShortDate(item.end_date, { includeYear: true })}</td><td>{workdayDuration(item.start_date, item.end_date)}</td><td>{(item.depends_on || []).map(id => dependencyFor(item, id)).join('; ') || '-'}</td><td>{metadata.references || '-'}</td></tr>
             })}</tbody>
           </table>
         </section>

@@ -17,10 +17,25 @@ export default async function handler(req, res) {
   try {
     const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } })
     const result = await syncProjectInbox({ supabase })
+    const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    const recentResult = await supabase.from('project_emails')
+      .select('id,email_to,attachments,created_at')
+      .gte('created_at', cutoff)
+    if (recentResult.error) throw recentResult.error
+    const projectAddress = String(process.env.PROJECT_EMAIL_ADDRESS || '').toLowerCase()
+    const unrelated = (recentResult.data || []).filter(row =>
+      !String(row.email_to || '').toLowerCase().includes(projectAddress),
+    )
+
     return res.json({
       connected: true,
       imported: result.count,
+      skippedUnrelated: result.skippedUnrelated,
       processingErrors: result.errors,
+      audit: {
+        recentImported: recentResult.data?.length || 0,
+        unrelated: unrelated.length,
+      },
     })
   } catch (error) {
     return res.status(500).json({ connected: false, error: error.message })

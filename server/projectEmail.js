@@ -22,6 +22,7 @@ export async function syncProjectInbox({ supabase, lookbackDays = 3, maxMessages
   })
   const imported = []
   const errors = []
+  let skippedUnrelated = 0
 
   try {
     await client.connect()
@@ -34,6 +35,10 @@ export async function syncProjectInbox({ supabase, lookbackDays = 3, maxMessages
     for await (const message of client.fetch(uids, { source: true }, { uid: true })) {
       try {
         const parsed = await simpleParser(message.source)
+        if (!messageTargetsAddress(parsed, mailbox.address)) {
+          skippedUnrelated += 1
+          continue
+        }
         const body = plainTextBody(parsed)
         const messageId = parsed.messageId || fallbackMessageId(parsed, body)
         const existing = await supabase.from('project_emails').select('id').eq('message_id', messageId).maybeSingle()
@@ -117,7 +122,7 @@ export async function syncProjectInbox({ supabase, lookbackDays = 3, maxMessages
     try { await client.logout() } catch {}
   }
 
-  return { imported, count: imported.length, errors }
+  return { imported, count: imported.length, errors, skippedUnrelated }
 }
 
 export function mailboxConfiguration() {
@@ -130,6 +135,21 @@ export function mailboxConfiguration() {
     port: Number(process.env.PROJECT_EMAIL_IMAP_PORT || 993),
     secure: process.env.PROJECT_EMAIL_IMAP_SECURE !== 'false',
   }
+}
+
+export function messageTargetsAddress(parsed, address) {
+  const target = String(address || '').trim().toLowerCase()
+  if (!target) return false
+  const headers = parsed?.headers
+  const recipientData = [
+    parsed?.to,
+    parsed?.cc,
+    parsed?.bcc,
+    headers?.get?.('delivered-to'),
+    headers?.get?.('x-original-to'),
+    headers?.get?.('envelope-to'),
+  ]
+  return JSON.stringify(recipientData).toLowerCase().includes(target)
 }
 
 async function classifyProjectEmail({ subject, from, body, attachments }) {

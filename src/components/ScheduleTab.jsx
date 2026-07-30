@@ -4,7 +4,10 @@ import { buildJeffersonSchedule, getJeffersonTaskMetadata } from '../data/jeffer
 import {
   addCalendarDays,
   addWorkdays,
+  applyTaskChange,
+  changedScheduleRows,
   diffCalendarDays,
+  earliestDependencyStart,
   enforceDependencies,
   formatShortDate,
   hasDependencyCycle,
@@ -23,7 +26,7 @@ import { supabase } from '../lib/supabase.js'
 
 const ROW_H = 48
 const HDR_H = 58
-const LIST_W = 360
+const LIST_W = 420
 const ZOOM_LEVELS = [28, 36, 48, 64, 96]
 const ZOOM_DEFAULT = 2
 
@@ -67,12 +70,6 @@ function getMonthGroups(weeks) {
   return groups
 }
 
-function sameTask(a, b) {
-  const fields = ['name', 'parent_id', 'start_date', 'end_date', 'status', 'sort_order', 'color']
-  return fields.every(field => a?.[field] === b?.[field])
-    && JSON.stringify(a?.depends_on || []) === JSON.stringify(b?.depends_on || [])
-}
-
 function csvCell(value) {
   return `"${String(value ?? '').replaceAll('"', '""')}"`
 }
@@ -111,7 +108,7 @@ export default function ScheduleTab() {
     }
   }
 
-  async function persistTasks(candidateTasks, changedIds, successText = 'Schedule saved') {
+  async function persistTasks(candidateTasks, changedIds, successText = 'Schedule saved', baselineTasks = tasksRef.current) {
     if (hasDependencyCycle(candidateTasks)) {
       setNotice({ type: 'error', text: 'Dependency cycle detected. Remove the circular predecessor before saving.' })
       await load()
@@ -120,9 +117,9 @@ export default function ScheduleTab() {
 
     const enforced = enforceDependencies(candidateTasks, changedIds)
     const rolled = rollupPhaseDates(enforced.tasks)
-    const before = new Map(tasksRef.current.map(task => [task.id, task]))
-    const changed = rolled.filter(task => !sameTask(task, before.get(task.id)))
+    const changed = changedScheduleRows(baselineTasks, rolled)
     if (!changed.length) {
+      tasksRef.current = rolled
       setTasks(rolled)
       return true
     }
@@ -169,14 +166,12 @@ export default function ScheduleTab() {
       } else {
         range = shiftWorkdayRange(drag.originalStart, drag.originalEnd, calendarDelta)
       }
-      setTasks(previous => {
-        const next = previous.map(task => task.id === drag.taskId ? { ...task, ...range } : task)
-        tasksRef.current = next
-        return next
-      })
+      const next = applyTaskChange(drag.baselineTasks, drag.taskId, range)
+      tasksRef.current = next
+      setTasks(next)
     }
     const onUp = async () => {
-      await persistTasks(tasksRef.current, [drag.taskId], 'Task dates and downstream dependencies updated')
+      await persistTasks(tasksRef.current, [drag.taskId], 'Task dates and downstream dependencies updated', drag.baselineTasks)
       setDrag(null)
     }
     window.addEventListener('mousemove', onMove)
@@ -361,6 +356,7 @@ export default function ScheduleTab() {
       startX: event.clientX,
       originalStart: task.start_date,
       originalEnd: task.end_date,
+      baselineTasks: tasksRef.current.map(item => ({ ...item, depends_on: [...(item.depends_on || [])] })),
     })
   }
 
@@ -405,7 +401,7 @@ export default function ScheduleTab() {
   const inspections = childTasks.filter(task => getJeffersonTaskMetadata(task.name).type === 'inspection').length
   const completed = childTasks.filter(task => task.status === 'complete').length
   const editingTask = tasks.find(task => task.id === editingId)
-  const dependencyName = id => tasks.find(task => task.id === id)?.name || ''
+  const dependencyName = id => (tasks.find(task => task.id === id)?.name || '').replace(/^INSPECTION - /, '')
 
   function exportCsv() {
     const header = ['Phase', 'Task', 'Trade', 'Type', 'Start', 'Finish', 'Workdays', 'Predecessors', 'Plan references', 'Notes']
@@ -457,7 +453,7 @@ export default function ScheduleTab() {
           </button>
           <button onClick={exportCsv} className="btn-secondary text-xs px-3 py-2">Export CSV</button>
           <button onClick={() => window.print()} className="btn-secondary text-xs px-3 py-2">Print / Save PDF</button>
-          <span className="text-lbl3 text-xs hidden xl:inline">Dates use a Monday-Friday work calendar. Moving a task pushes conflicting successors.</span>
+          <span className="text-lbl3 text-xs hidden xl:inline">Monday-Friday calendar. Moving a task immediately moves any conflicting successors.</span>
           <div className="ml-auto flex items-center gap-1">
             <span className="text-lbl3 text-xs mr-1">Zoom</span>
             <button onClick={() => setZoomIndex(index => Math.max(0, index - 1))} disabled={zoomIndex === 0} className="btn-secondary text-xs px-2 py-1">-</button>
@@ -471,6 +467,7 @@ export default function ScheduleTab() {
           <Legend color="#bf5af2" label="Procurement" />
           <Legend color="#30d158" label="Complete" />
           <Legend color="#ff453a" label="Blocked" />
+          <DependencyLegend />
         </div>
 
         <div className="apple-card schedule-gantt" style={{ overflow: 'auto', maxHeight: '70vh' }}>
@@ -502,6 +499,7 @@ export default function ScheduleTab() {
               <div style={{ width: LIST_W, minWidth: LIST_W, position: 'sticky', left: 0, zIndex: 10, background: '#1c1c1e', borderRight: '1px solid rgba(84,84,88,0.3)' }}>
                 {flatList.map(({ task, depth, isPhase, phaseColor }, flatIndex) => {
                   const metadata = getJeffersonTaskMetadata(task.name)
+                  const predecessors = (task.depends_on || []).map(dependencyName).filter(Boolean)
                   const isDragging = reorder?.taskId === task.id
                   const isNestTarget = reorder && !reorder.isPhase && isPhase && reorder.targetFlatIndex === flatIndex && reorder.taskId !== task.id
                   const isReorderTarget = reorder && reorder.targetFlatIndex === flatIndex && reorder.taskId !== task.id && !isNestTarget
@@ -522,7 +520,12 @@ export default function ScheduleTab() {
                       <span style={{ width: 7, height: 7, borderRadius: metadata.type === 'inspection' ? 1 : '50%', transform: metadata.type === 'inspection' ? 'rotate(45deg)' : undefined, background: metadata.type === 'inspection' ? '#ff9f0a' : phaseColor, flexShrink: 0 }} />
                       <div onClick={() => editingId === task.id ? setEditingId(null) : openEdit(task)} style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 13, fontWeight: isPhase ? 700 : 500, color: isPhase ? '#fff' : '#ebebf5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.name.replace(/^INSPECTION - /, '')}</div>
-                        {!isPhase && <div style={{ fontSize: 10, color: metadata.type === 'inspection' ? '#ff9f0a' : '#8e8e93', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{metadata.trade || 'Unassigned'} · {workdayDuration(task.start_date, task.end_date)} workday{workdayDuration(task.start_date, task.end_date) === 1 ? '' : 's'}</div>}
+                        {!isPhase && <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                          <span style={{ fontSize: 10, color: metadata.type === 'inspection' ? '#ff9f0a' : '#8e8e93', flexShrink: 0 }}>{metadata.trade || 'Unassigned'} · {workdayDuration(task.start_date, task.end_date)}d</span>
+                          <span title={predecessors.length ? `Starts after: ${predecessors.join(', ')}` : 'No predecessor'} style={{ fontSize: 10, color: predecessors.length ? '#ffb340' : '#636366', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {predecessors.length ? `↳ After ${predecessors.join(', ')}` : 'No predecessor'}
+                          </span>
+                        </div>}
                       </div>
                       <span style={{ color: STATUS_MAP[task.status]?.color || '#8E8E93', fontSize: 9, flexShrink: 0 }}>●</span>
                       {isPhase && <button onClick={event => { event.stopPropagation(); addTask(task.id) }} style={{ fontSize: 14, fontWeight: 700, color: '#0a84ff', flexShrink: 0, opacity: hoveredId === task.id ? 1 : 0, width: 18 }} title="Add task">+</button>}
@@ -569,7 +572,7 @@ export default function ScheduleTab() {
                     </div>
                   )
                 })}
-                <DependencyArrows tasks={tasks} flatList={flatList} timelineStart={timelineStart} bodyHeight={bodyHeight} timelineWidth={timelineWidth} dayWidth={dayWidth} />
+                <DependencyArrows flatList={flatList} timelineStart={timelineStart} bodyHeight={bodyHeight} timelineWidth={timelineWidth} dayWidth={dayWidth} activeTaskId={editingId || hoveredId || drag?.taskId} />
               </div>
             </div>
           </div>
@@ -579,7 +582,7 @@ export default function ScheduleTab() {
       <PrintableSchedule phases={phases} tasks={tasks} projectStart={projectStart} projectEnd={projectEnd} />
 
       {editingTask && (
-        <EditModal task={editingTask} fields={editFields} setFields={setEditFields} allTasks={tasks.filter(task => task.parent_id && task.id !== editingId)} isPhase={!editingTask.parent_id} onSave={() => saveEdit(editingId)} onCancel={() => setEditingId(null)} onDelete={() => deleteTask(editingId)} onAddTask={() => addTask(editingId)} />
+        <EditModal task={editingTask} fields={editFields} setFields={setEditFields} tasks={tasks} isPhase={!editingTask.parent_id} onSave={() => saveEdit(editingId)} onCancel={() => setEditingId(null)} onDelete={() => deleteTask(editingId)} onAddTask={() => addTask(editingId)} />
       )}
     </div>
   )
@@ -593,7 +596,11 @@ function Legend({ color, label, diamond }) {
   return <span className="flex items-center gap-1.5"><span style={{ width: 8, height: 8, background: color, borderRadius: diamond ? 1 : 4, transform: diamond ? 'rotate(45deg)' : undefined }} />{label}</span>
 }
 
-function DependencyArrows({ tasks, flatList, timelineStart, bodyHeight, timelineWidth, dayWidth }) {
+function DependencyLegend() {
+  return <span className="flex items-center gap-1.5"><span style={{ color: '#ffb340', fontWeight: 700, letterSpacing: -1 }}>—›</span>Predecessor → successor</span>
+}
+
+function DependencyArrows({ flatList, timelineStart, bodyHeight, timelineWidth, dayWidth, activeTaskId }) {
   const arrows = []
   flatList.forEach(({ task }, toIndex) => {
     ;(task.depends_on || []).forEach(dependencyId => {
@@ -606,6 +613,9 @@ function DependencyArrows({ tasks, flatList, timelineStart, bodyHeight, timeline
         y1: fromIndex * ROW_H + ROW_H / 2,
         x2: diffCalendarDays(timelineStart, task.start_date) * dayWidth,
         y2: toIndex * ROW_H + ROW_H / 2,
+        fromId: dependencyId,
+        toId: task.id,
+        label: `${fromTask.name.replace(/^INSPECTION - /, '')} → ${task.name.replace(/^INSPECTION - /, '')}`,
         key: `${dependencyId}-${task.id}`,
       })
     })
@@ -613,19 +623,28 @@ function DependencyArrows({ tasks, flatList, timelineStart, bodyHeight, timeline
   if (!arrows.length) return null
   return (
     <svg style={{ position: 'absolute', top: 0, left: 0, width: timelineWidth, height: bodyHeight, pointerEvents: 'none', zIndex: 3 }}>
-      <defs><marker id="dependency-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="rgba(255,159,10,0.9)" /></marker></defs>
-      {arrows.map(({ x1, y1, x2, y2, key }) => {
+      <defs>
+        <marker id="dependency-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#ffb340" /></marker>
+        <marker id="dependency-arrow-muted" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="rgba(255,179,64,0.5)" /></marker>
+      </defs>
+      {arrows.map(({ x1, y1, x2, y2, fromId, toId, label, key }) => {
+        const active = Boolean(activeTaskId && (activeTaskId === fromId || activeTaskId === toId))
+        const opacity = active ? 1 : activeTaskId ? 0.1 : 0.3
         const elbowX = Math.max(x1 + 12, x2 - 10)
         const path = x2 > x1 + 8
           ? `M${x1},${y1} L${elbowX},${y1} L${elbowX},${y2} L${x2},${y2}`
           : `M${x1},${y1} L${x1 + 12},${y1} L${x1 + 12},${(y1 + y2) / 2} L${x2 - 12},${(y1 + y2) / 2} L${x2 - 12},${y2} L${x2},${y2}`
-        return <path key={key} d={path} fill="none" stroke="rgba(255,159,10,0.65)" strokeWidth="1.25" markerEnd="url(#dependency-arrow)" />
+        return <g key={key} opacity={opacity}>
+          <title>{label}</title>
+          <circle cx={x1} cy={y1} r={active ? 2.5 : 2} fill={active ? '#ffb340' : 'rgba(255,179,64,0.5)'} />
+          <path d={path} fill="none" stroke={active ? '#ffb340' : 'rgba(255,179,64,0.5)'} strokeWidth={active ? 1.8 : 1.1} markerEnd={active ? 'url(#dependency-arrow)' : 'url(#dependency-arrow-muted)'} />
+        </g>
       })}
     </svg>
   )
 }
 
-function EditModal({ task, fields, setFields, allTasks, isPhase, onSave, onCancel, onDelete, onAddTask }) {
+function EditModal({ task, fields, setFields, tasks, isPhase, onSave, onCancel, onDelete, onAddTask }) {
   const [dependencyFilter, setDependencyFilter] = useState('')
   const set = key => event => setFields(previous => ({ ...previous, [key]: event.target.value }))
   const toggleDependency = (id, checked) => setFields(previous => ({
@@ -633,7 +652,17 @@ function EditModal({ task, fields, setFields, allTasks, isPhase, onSave, onCance
     depends_on: checked ? [...new Set([...(previous.depends_on || []), id])] : (previous.depends_on || []).filter(value => value !== id),
   }))
   const filter = dependencyFilter.trim().toLowerCase()
-  const filtered = [...allTasks].sort((a, b) => a.name.localeCompare(b.name)).filter(item => !filter || item.name.toLowerCase().includes(filter))
+  const phaseById = new Map(tasks.filter(item => !item.parent_id).map(item => [item.id, item]))
+  const selected = (fields.depends_on || []).map(id => tasks.find(item => item.id === id)).filter(Boolean)
+  const earliestStart = earliestDependencyStart(tasks, fields.depends_on)
+  const candidates = tasks
+    .filter(item => item.parent_id && item.id !== task.id && !(fields.depends_on || []).includes(item.id))
+    .map(item => {
+      const candidateTasks = tasks.map(row => row.id === task.id ? { ...row, depends_on: [...(fields.depends_on || []), item.id] } : row)
+      return { ...item, createsCycle: hasDependencyCycle(candidateTasks), phase: phaseById.get(item.parent_id) }
+    })
+    .sort((a, b) => (a.phase?.sort_order || 0) - (b.phase?.sort_order || 0) || (a.sort_order || 0) - (b.sort_order || 0))
+    .filter(item => !filter || `${item.phase?.name || ''} ${item.name}`.toLowerCase().includes(filter))
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', pointerEvents: 'none' }}>
@@ -654,14 +683,30 @@ function EditModal({ task, fields, setFields, allTasks, isPhase, onSave, onCance
         </div>
         {isPhase ? <p className="text-lbl3 text-xs">Phase dates roll up automatically from child tasks.</p> : (
           <div>
-            <div className="text-lbl3 uppercase tracking-wider font-semibold mb-2" style={{ fontSize: 10 }}>Finish-to-start predecessors</div>
-            <input value={dependencyFilter} onChange={event => setDependencyFilter(event.target.value)} className="apple-input text-xs w-full mb-2" placeholder="Filter tasks..." />
-            <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
-              {filtered.map(item => {
-                const checked = (fields.depends_on || []).includes(item.id)
-                return <label key={item.id} className="flex items-center gap-1.5 cursor-pointer text-xs rounded-md px-2 py-1" style={{ color: checked ? '#0a84ff' : '#ebebf5', background: checked ? 'rgba(10,132,255,0.15)' : 'rgba(84,84,88,0.2)' }}><input type="checkbox" checked={checked} onChange={event => toggleDependency(item.id, event.target.checked)} style={{ accentColor: '#0a84ff' }} />{item.name.replace(/^INSPECTION - /, '')}</label>
-              })}
-              {!filtered.length && <span className="text-lbl3 text-xs italic">No matching tasks</span>}
+            <div className="flex items-start justify-between gap-4 mb-2">
+              <div>
+                <div className="text-white font-semibold" style={{ fontSize: 13 }}>This task starts after</div>
+                <p className="text-lbl3 mt-0.5" style={{ fontSize: 10 }}>Finish-to-start rule: the task begins on the next working day after every selected predecessor is complete.</p>
+              </div>
+              {earliestStart && <div className="text-right flex-shrink-0"><div className="text-lbl3 uppercase tracking-wider" style={{ fontSize: 9 }}>Earliest start</div><div style={{ color: '#ffb340', fontSize: 12, fontWeight: 700 }}>{formatShortDate(earliestStart, { includeYear: true })}</div></div>}
+            </div>
+            <div className="flex flex-wrap gap-2 mb-3 min-h-7">
+              {selected.map(item => <button key={item.id} type="button" onClick={() => toggleDependency(item.id, false)} title="Remove predecessor" className="flex items-center gap-1.5 text-xs rounded-md px-2 py-1" style={{ color: '#ffb340', background: 'rgba(255,179,64,0.12)', border: '1px solid rgba(255,179,64,0.28)' }}>
+                <span>↳ {item.name.replace(/^INSPECTION - /, '')}</span><span style={{ color: '#8e8e93' }}>{formatShortDate(item.end_date)}</span><span aria-hidden="true">×</span>
+              </button>)}
+              {!selected.length && <span className="text-lbl3 text-xs italic">No predecessor — this task may start independently.</span>}
+            </div>
+            <div className="text-lbl3 uppercase tracking-wider font-semibold mb-1.5" style={{ fontSize: 10 }}>Add a predecessor</div>
+            <input value={dependencyFilter} onChange={event => setDependencyFilter(event.target.value)} className="apple-input text-xs w-full mb-2" placeholder="Search by phase or task..." />
+            <div className="max-h-40 overflow-y-auto rounded-lg" style={{ border: '1px solid rgba(84,84,88,0.35)' }}>
+              {candidates.map(item => (
+                <button key={item.id} type="button" disabled={item.createsCycle} onClick={() => toggleDependency(item.id, true)} className="w-full flex items-center gap-3 px-3 py-2 text-left" style={{ borderBottom: '1px solid rgba(84,84,88,0.22)', opacity: item.createsCycle ? 0.38 : 1, cursor: item.createsCycle ? 'not-allowed' : 'pointer' }} title={item.createsCycle ? 'Unavailable because it would create a circular dependency' : 'Add as predecessor'}>
+                  <span style={{ color: '#0a84ff', fontSize: 15, fontWeight: 700 }}>+</span>
+                  <span style={{ flex: 1, minWidth: 0 }}><span className="block text-lbl3 uppercase tracking-wider" style={{ fontSize: 9 }}>{item.phase?.name || 'Unassigned phase'}</span><span className="block text-white truncate" style={{ fontSize: 12 }}>{item.name.replace(/^INSPECTION - /, '')}</span></span>
+                  <span className="text-lbl3 flex-shrink-0" style={{ fontSize: 10 }}>Finishes {formatShortDate(item.end_date)}</span>
+                </button>
+              ))}
+              {!candidates.length && <div className="text-lbl3 text-xs italic px-3 py-3">No matching tasks</div>}
             </div>
           </div>
         )}

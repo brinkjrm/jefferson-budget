@@ -102,6 +102,12 @@ export function shiftWorkdayRange(start, end, calendarDelta) {
   }
 }
 
+export function earliestDependencyStart(tasks, dependencyIds = []) {
+  const byId = new Map(tasks.map(task => [task.id, task]))
+  const latestFinish = maxDate(dependencyIds.map(id => byId.get(id)?.end_date))
+  return latestFinish ? nextWorkday(latestFinish) : null
+}
+
 export function enforceDependencies(tasks, changedIds = []) {
   const byId = new Map(tasks.map(task => [task.id, { ...task }]))
   const queue = [...changedIds]
@@ -110,10 +116,8 @@ export function enforceDependencies(tasks, changedIds = []) {
   for (const id of changedIds) {
     const task = byId.get(id)
     if (!task?.parent_id) continue
-    const dependencyEnds = (task.depends_on || []).map(depId => byId.get(depId)?.end_date).filter(Boolean)
-    const latestDependency = maxDate(dependencyEnds)
-    if (!latestDependency) continue
-    const earliestStart = nextWorkday(latestDependency)
+    const earliestStart = earliestDependencyStart([...byId.values()], task.depends_on)
+    if (!earliestStart) continue
     if (!task.start_date || parseDate(task.start_date) < earliestStart) {
       const duration = Math.max(1, workdayDuration(task.start_date, task.end_date))
       task.start_date = toDateString(earliestStart)
@@ -125,10 +129,8 @@ export function enforceDependencies(tasks, changedIds = []) {
     const predecessorId = queue.shift()
     for (const task of byId.values()) {
       if (!task.parent_id || !(task.depends_on || []).includes(predecessorId)) continue
-      const dependencyEnds = (task.depends_on || []).map(id => byId.get(id)?.end_date).filter(Boolean)
-      const latestDependency = maxDate(dependencyEnds)
-      if (!latestDependency) continue
-      const earliestStart = nextWorkday(latestDependency)
+      const earliestStart = earliestDependencyStart([...byId.values()], task.depends_on)
+      if (!earliestStart) continue
       if (!task.start_date || parseDate(task.start_date) < earliestStart) {
         const duration = Math.max(1, workdayDuration(task.start_date, task.end_date))
         task.start_date = toDateString(earliestStart)
@@ -174,4 +176,20 @@ export function rollupPhaseDates(tasks) {
     phase.end_date = toDateString(maxDate(children.map(task => task.end_date)))
   }
   return rolled
+}
+
+export function applyTaskChange(tasks, taskId, patch) {
+  const candidate = tasks.map(task => task.id === taskId ? { ...task, ...patch } : { ...task })
+  return rollupPhaseDates(enforceDependencies(candidate, [taskId]).tasks)
+}
+
+export function sameScheduleTask(a, b) {
+  const fields = ['name', 'parent_id', 'start_date', 'end_date', 'status', 'sort_order', 'color']
+  return fields.every(field => a?.[field] === b?.[field])
+    && JSON.stringify(a?.depends_on || []) === JSON.stringify(b?.depends_on || [])
+}
+
+export function changedScheduleRows(beforeTasks, afterTasks) {
+  const before = new Map(beforeTasks.map(task => [task.id, task]))
+  return afterTasks.filter(task => !sameScheduleTask(task, before.get(task.id)))
 }

@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import { buildJeffersonSchedule } from '../src/data/jeffersonSchedule.js'
 import {
   addWorkdays,
+  applyTaskChange,
+  changedScheduleRows,
+  earliestDependencyStart,
   enforceDependencies,
   hasDependencyCycle,
   isWorkday,
@@ -50,6 +53,28 @@ test('moving work later pushes successors without moving unrelated tasks', () =>
     id: 'b', parent_id: 'phase', start_date: '2026-08-13', end_date: '2026-08-14', depends_on: ['a'],
   })
   assert.equal(result.find(item => item.id === 'c').start_date, '2026-08-03')
+})
+
+test('a successor cannot be dated before its selected predecessor finishes', () => {
+  const tasks = [
+    { id: 'a', parent_id: 'phase', start_date: '2026-08-03', end_date: '2026-08-07', depends_on: [] },
+    { id: 'b', parent_id: 'phase', start_date: '2026-08-10', end_date: '2026-08-12', depends_on: ['a'] },
+  ]
+  const result = applyTaskChange(tasks, 'b', { start_date: '2026-08-05', end_date: '2026-08-07' })
+  assert.equal(result.find(item => item.id === 'b').start_date, '2026-08-10')
+  assert.equal(result.find(item => item.id === 'b').end_date, '2026-08-12')
+  assert.equal(toDateString(earliestDependencyStart(tasks, ['a'])), '2026-08-10')
+})
+
+test('drag previews are compared with the pre-drag baseline before saving', () => {
+  const baseline = [
+    { id: 'phase', parent_id: null, name: 'Phase', start_date: '2026-08-03', end_date: '2026-08-07', depends_on: [] },
+    { id: 'a', parent_id: 'phase', name: 'A', start_date: '2026-08-03', end_date: '2026-08-05', depends_on: [] },
+    { id: 'b', parent_id: 'phase', name: 'B', start_date: '2026-08-06', end_date: '2026-08-07', depends_on: ['a'] },
+  ]
+  const preview = applyTaskChange(baseline, 'a', { start_date: '2026-08-10', end_date: '2026-08-12' })
+  assert.deepEqual(changedScheduleRows(baseline, preview).map(item => item.id).sort(), ['a', 'b', 'phase'])
+  assert.equal(preview.find(item => item.id === 'b').start_date, '2026-08-13')
 })
 
 test('dependency cycles are rejected', () => {

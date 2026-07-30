@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useRef, useCallback } from 'react'
+import { useProject, useProjectCollection } from '../context/ProjectContext.jsx'
 import { supabase } from '../lib/supabase.js'
 
 const fmt = n => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0 })
@@ -19,11 +20,12 @@ function fuzzyMatch(a = '', b = '') {
 }
 
 export default function BidsTab() {
-  const [bids,         setBids]         = useState([])
-  const [contractors,  setContractors]  = useState([])
-  const [budgetItems,  setBudgetItems]  = useState([])
-  const [schedTasks,   setSchedTasks]   = useState([])
-  const [loading,      setLoading]      = useState(true)
+  const { refresh } = useProject()
+  const [bids, setBids, bidsLoading] = useProjectCollection('bids')
+  const [contractors, , contractorsLoading] = useProjectCollection('contractors')
+  const [budgetItems, , budgetLoading] = useProjectCollection('lineItems')
+  const [schedTasks, , scheduleLoading] = useProjectCollection('scheduleTasks')
+  const loading = bidsLoading || contractorsLoading || budgetLoading || scheduleLoading
   const [dragging,     setDragging]     = useState(false)
   const [extracting,   setExtracting]   = useState(false)
   const [polling,      setPolling]      = useState(false)
@@ -35,21 +37,8 @@ export default function BidsTab() {
   const [expandedBid,   setExpandedBid]   = useState(null)
   const fileInputRef = useRef()
 
-  useEffect(() => { loadAll() }, [])
-
   async function loadAll() {
-    setLoading(true)
-    const [b, c, li, st] = await Promise.all([
-      supabase.from('bids').select('*, contractors(*)').order('created_at', { ascending: false }),
-      supabase.from('contractors').select('*').order('name'),
-      supabase.from('line_items').select('*').order('sort_order'),
-      supabase.from('schedule_tasks').select('*').order('sort_order'),
-    ])
-    setBids(b.data || [])
-    setContractors(c.data || [])
-    setBudgetItems(li.data || [])
-    setSchedTasks(st.data || [])
-    setLoading(false)
+    await refresh(['bids', 'contractors', 'lineItems', 'scheduleTasks'])
   }
 
   function showToast(msg, type = 'success') {
@@ -154,8 +143,7 @@ export default function BidsTab() {
       if (saved) {
         setBids(prev => [saved, ...prev])
         if (!contractors.find(c => c.id === contractorId)) {
-          const { data: cList } = await supabase.from('contractors').select('*').order('name')
-          if (cList) setContractors(cList)
+          await refresh(['contractors'])
         }
       }
       setReviewBid(null)
@@ -406,8 +394,7 @@ export default function BidsTab() {
           onClose={() => setContractorDrawer(null)}
           onSave={async updated => {
             await supabase.from('contractors').update(updated).eq('id', contractorDrawer.id)
-            const { data } = await supabase.from('contractors').select('*').order('name')
-            if (data) setContractors(data)
+            await refresh(['contractors'])
             setContractorDrawer({ ...contractorDrawer, ...updated })
           }}
         />

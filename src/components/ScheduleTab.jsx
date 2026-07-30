@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { useProjectCollection } from '../context/ProjectContext.jsx'
 import { buildJeffersonSchedule, getJeffersonTaskMetadata } from '../data/jeffersonSchedule.js'
 import {
   addCalendarDays,
@@ -77,8 +78,7 @@ function csvCell(value) {
 }
 
 export default function ScheduleTab() {
-  const [tasks, setTasks] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [tasks, setTasks, loading, refreshTasks] = useProjectCollection('scheduleTasks')
   const [loadingTemplate, setLoadingTemplate] = useState(false)
   const [collapsed, setCollapsed] = useState(new Set())
   const [editingId, setEditingId] = useState(null)
@@ -97,7 +97,6 @@ export default function ScheduleTab() {
 
   useEffect(() => { dayWidthRef.current = dayWidth }, [dayWidth])
   useEffect(() => { tasksRef.current = tasks }, [tasks])
-  useEffect(() => { load() }, [])
   useEffect(() => {
     if (!notice) return undefined
     const timer = setTimeout(() => setNotice(null), 5000)
@@ -105,14 +104,11 @@ export default function ScheduleTab() {
   }, [notice])
 
   async function load() {
-    setLoading(true)
-    const { data, error } = await supabase.from('schedule_tasks').select('*').order('sort_order').order('created_at')
+    const result = await refreshTasks()
+    const { error } = result.scheduleTasks
     if (error) {
       setNotice({ type: 'error', text: `Could not load schedule: ${error.message}` })
-    } else {
-      setTasks(data || [])
     }
-    setLoading(false)
   }
 
   async function persistTasks(candidateTasks, changedIds, successText = 'Schedule saved') {

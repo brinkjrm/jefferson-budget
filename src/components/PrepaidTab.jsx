@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase.js'
+import React, { useState } from 'react'
+import { useProject, useProjectCollection } from '../context/ProjectContext.jsx'
 
 const fmt = n => n == null ? '' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2 })
 const num = v => v === '' || v == null ? 0 : parseFloat(String(v).replace(/[$,]/g, '')) || 0
@@ -10,45 +10,33 @@ function empty() {
 }
 
 export default function PrepaidTab() {
-  const [items, setItems]       = useState([])
-  const [loading, setLoading]   = useState(true)
+  const { createEntity, updateEntity, removeEntity } = useProject()
+  const [items, , loading] = useProjectCollection('prepaidItems')
   const [editingId, setEditingId] = useState(null)
   const [editFields, setEditFields] = useState({})
   const [adding, setAdding]     = useState(false)
   const [newFields, setNewFields] = useState(empty())
 
-  useEffect(() => { load() }, [])
-
-  async function load() {
-    setLoading(true)
-    const { data } = await supabase.from('prepaid_items').select('*')
-      .order('date_paid', { ascending: false }).order('created_at', { ascending: false })
-    setItems(data || [])
-    setLoading(false)
-  }
-
   async function addItem() {
-    const { data } = await supabase.from('prepaid_items').insert({
+    const data = await createEntity('prepaidItems', {
       description: newFields.description, vendor: newFields.vendor,
       amount: num(newFields.amount), date_paid: newFields.date_paid || null,
       payment_method: newFields.payment_method, check_number: newFields.check_number, notes: newFields.notes,
-    }).select().single()
-    if (data) { setItems(prev => [data, ...prev]); setNewFields(empty()); setAdding(false) }
+    })
+    if (data) { setNewFields(empty()); setAdding(false) }
   }
 
   async function saveEdit(id) {
     const patch = { description: editFields.description, vendor: editFields.vendor,
       amount: num(editFields.amount), date_paid: editFields.date_paid || null,
       payment_method: editFields.payment_method, check_number: editFields.check_number, notes: editFields.notes }
-    await supabase.from('prepaid_items').update(patch).eq('id', id)
-    setItems(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r))
+    await updateEntity('prepaidItems', id, patch)
     setEditingId(null)
   }
 
   async function deleteItem(id) {
     if (!confirm('Delete this prepaid item?')) return
-    await supabase.from('prepaid_items').delete().eq('id', id)
-    setItems(prev => prev.filter(r => r.id !== id))
+    await removeEntity('prepaidItems', id)
   }
 
   function startEdit(item) {

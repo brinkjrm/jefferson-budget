@@ -1,28 +1,20 @@
-import React, { useState, useEffect } from 'react'
-import { supabase, uploadInvoice } from '../lib/supabase.js'
+import React, { useState } from 'react'
+import { useProject, useProjectCollection } from '../context/ProjectContext.jsx'
+import { uploadInvoice } from '../lib/supabase.js'
 import { generateDrawPDF } from '../utils/pdf.js'
 
 const fmt = n => n == null || n === '' ? '$—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2 })
 const num = v => v === '' || v == null ? null : parseFloat(String(v).replace(/[$,]/g, '')) || 0
 
 export default function DrawsTab({ settings }) {
-  const [draws, setDraws]         = useState([])
-  const [loading, setLoading]     = useState(true)
+  const { createEntity, removeEntity } = useProject()
+  const [draws, , loading, refreshDraws] = useProjectCollection('drawSheets')
   const [activeDrawId, setActiveDrawId] = useState(null)
   const [view, setView]           = useState('list')
 
-  useEffect(() => { loadDraws() }, [])
-
-  async function loadDraws() {
-    setLoading(true)
-    const { data } = await supabase.from('draw_sheets').select('*').order('draw_number', { ascending: false })
-    setDraws(data || [])
-    setLoading(false)
-  }
-
   async function createDraw() {
     const maxNum = draws.reduce((m, d) => Math.max(m, d.draw_number || 0), 0)
-    const { data } = await supabase.from('draw_sheets').insert({
+    const data = await createEntity('drawSheets', {
       draw_number: maxNum + 1,
       draw_date: new Date().toISOString().split('T')[0],
       borrower: 'Josh Meyer',
@@ -32,21 +24,20 @@ export default function DrawsTab({ settings }) {
       loan_amount: num(settings.loan_amount),
       loan_number: settings.loan_number || '',
       status: 'draft',
-    }).select().single()
-    if (data) { setDraws(prev => [data, ...prev]); setActiveDrawId(data.id); setView('form') }
+    })
+    if (data) { setActiveDrawId(data.id); setView('form') }
   }
 
   async function deleteDraw(id) {
     if (!confirm('Delete this draw sheet?')) return
-    await supabase.from('draw_sheets').delete().eq('id', id)
-    setDraws(prev => prev.filter(d => d.id !== id))
+    await removeEntity('drawSheets', id)
   }
 
   if (loading) return <div className="text-center py-24 text-lbl3 text-sm">Loading…</div>
 
   if (view === 'form' && activeDrawId) {
     return <DrawForm drawId={activeDrawId} settings={settings}
-      onBack={() => { setView('list'); loadDraws() }} />
+      onBack={() => { setView('list'); refreshDraws() }} />
   }
 
   return (
@@ -121,27 +112,16 @@ export default function DrawsTab({ settings }) {
 // ── Draw Form ──────────────────────────────────────────────────────────────
 
 function DrawForm({ drawId, settings, onBack }) {
-  const [draw, setDraw]         = useState(null)
-  const [items, setItems]       = useState([])
-  const [loading, setLoading]   = useState(true)
+  const { createEntity, updateEntity, removeEntity } = useProject()
+  const [draws, , drawsLoading] = useProjectCollection('drawSheets')
+  const [allItems, , itemsLoading] = useProjectCollection('drawItems')
+  const draw = draws.find(item => item.id === drawId)
+  const items = allItems.filter(item => item.draw_sheet_id === drawId)
+  const loading = drawsLoading || itemsLoading
   const [pdfLoading, setPdfLoading] = useState(false)
 
-  useEffect(() => { loadDraw() }, [drawId])
-
-  async function loadDraw() {
-    setLoading(true)
-    const [{ data: d }, { data: its }] = await Promise.all([
-      supabase.from('draw_sheets').select('*').eq('id', drawId).single(),
-      supabase.from('draw_items').select('*').eq('draw_sheet_id', drawId).order('sort_order')
-    ])
-    setDraw(d)
-    setItems(its || [])
-    setLoading(false)
-  }
-
   async function updateDraw(patch) {
-    setDraw(p => ({ ...p, ...patch }))
-    await supabase.from('draw_sheets').update({ ...patch, updated_at: new Date().toISOString() }).eq('id', drawId)
+    await updateEntity('drawSheets', drawId, { ...patch, updated_at: new Date().toISOString() })
   }
 
   async function updateDrawField(key, value) {
@@ -150,20 +130,17 @@ function DrawForm({ drawId, settings, onBack }) {
   }
 
   async function addItem() {
-    const { data } = await supabase.from('draw_items').insert({
+    await createEntity('drawItems', {
       draw_sheet_id: drawId, description: '', previous_amount: 0, this_draw_amount: 0, sort_order: items.length,
-    }).select().single()
-    if (data) setItems(prev => [...prev, data])
+    })
   }
 
   async function updateItem(id, patch) {
-    setItems(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i))
-    await supabase.from('draw_items').update(patch).eq('id', id)
+    await updateEntity('drawItems', id, patch)
   }
 
   async function deleteItem(id) {
-    await supabase.from('draw_items').delete().eq('id', id)
-    setItems(prev => prev.filter(i => i.id !== id))
+    await removeEntity('drawItems', id)
   }
 
   async function handleInvoiceUpload(itemId, file, idx) {

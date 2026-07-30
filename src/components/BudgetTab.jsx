@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useRef } from 'react'
+import { useProject, useProjectCollection } from '../context/ProjectContext.jsx'
 import { supabase } from '../lib/supabase.js'
 
 const fmt = n => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0 })
@@ -10,24 +11,14 @@ const SECTION_PREFIX = { soft: 'B', hard: 'C' }
 const COL_COUNT = 10
 
 export default function BudgetTab() {
-  const [items, setItems]           = useState([])
-  const [loading, setLoading]       = useState(true)
+  const { createEntity, updateEntity, removeEntity } = useProject()
+  const [items, setItems, loading]  = useProjectCollection('lineItems')
   const [editingId, setEditingId]   = useState(null)
   const [editFields, setEditFields] = useState({})
 
-  useEffect(() => { load() }, [])
-
-  async function load() {
-    setLoading(true)
-    const { data } = await supabase.from('line_items').select('*').order('sort_order').order('created_at')
-    setItems(data || [])
-    setLoading(false)
-  }
-
   async function updateItem(id, patch) {
     patch.updated_at = new Date().toISOString()
-    await supabase.from('line_items').update(patch).eq('id', id)
-    setItems(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r))
+    await updateEntity('lineItems', id, patch)
   }
 
   async function toggleLock(item) {
@@ -36,19 +27,18 @@ export default function BudgetTab() {
 
   async function deleteItem(id) {
     if (!confirm('Delete this line item?')) return
-    await supabase.from('line_items').delete().eq('id', id)
-    setItems(prev => prev.filter(r => r.id !== id))
+    await removeEntity('lineItems', id)
   }
 
   async function addItem(section) {
     const sectionItems = items.filter(i => i.section === section)
     const maxOrder = sectionItems.reduce((m, i) => Math.max(m, i.sort_order || 0), 0)
     const newCode  = `${SECTION_PREFIX[section]}-${String(sectionItems.length + 1).padStart(2, '0')}`
-    const { data } = await supabase.from('line_items').insert({
+    const data = await createEntity('lineItems', {
       section, name: 'New Line Item', estimated_cost: 0, status: 'pending',
       sort_order: maxOrder + 1, code: newCode,
-    }).select().single()
-    if (data) { setItems(prev => [...prev, data]); startEdit(data) }
+    })
+    if (data) startEdit(data)
   }
 
   async function reorderItems(section, newItems) {

@@ -10,7 +10,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' })
   }
 
-  const { messages, budgetContext } = req.body
+  const { messages, projectContext, budgetContext } = req.body
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'messages array required' })
   }
@@ -21,7 +21,7 @@ export default async function handler(req, res) {
   }
 
   const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5-20250929'
-  const systemPrompt = buildSystemPrompt(budgetContext)
+  const systemPrompt = buildSystemPrompt(projectContext || budgetContext)
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -59,12 +59,23 @@ function fmt(n) {
   return '$' + Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })
 }
 
-function buildSystemPrompt(ctx) {
+export function buildSystemPrompt(ctx) {
   if (!ctx) {
     return `You are a construction budget assistant for Josh Meyer's home renovation at 3120 Jefferson St, Boulder CO 80304. Budget data is not yet loaded — ask the user to reload and try again.`
   }
 
-  const { lineItems = [], prepaidItems = [], drawSheets = [], settings = {} } = ctx
+  const isUnified = Boolean(ctx.model)
+  const model = ctx.model || {}
+  const lineItems = isUnified ? model.financials?.budgetItems || [] : ctx.lineItems || []
+  const prepaidItems = isUnified ? model.financials?.prepaidItems || [] : ctx.prepaidItems || []
+  const drawSheets = isUnified ? model.financials?.drawSheets || [] : ctx.drawSheets || []
+  const settings = isUnified ? model.settings || {} : ctx.settings || {}
+  const tasks = isUnified ? model.schedule?.tasks || [] : []
+  const bids = isUnified ? model.procurement?.bids || [] : []
+  const selections = isUnified ? model.procurement?.selections || [] : []
+  const plans = isUnified ? model.documents?.plans || [] : []
+  const metrics = ctx.metrics || {}
+  const actions = ctx.actions || []
 
   const totalEst   = lineItems.reduce((s, i) => s + (i.estimated_cost || 0), 0)
   const lockedAmt  = lineItems.filter(i => i.status === 'locked')
@@ -74,6 +85,9 @@ function buildSystemPrompt(ctx) {
   const overages   = lineItems.filter(i => i.actual_cost != null && i.actual_cost > (i.estimated_cost || 0))
   const prepaidTot = prepaidItems.reduce((s, i) => s + (i.amount || 0), 0)
   const pct        = totalEst > 0 ? Math.round((lockedAmt / totalEst) * 100) : 0
+  const completedTasks = tasks.filter(task => task.status === 'complete')
+  const blockedTasks = tasks.filter(task => task.status === 'blocked')
+  const inspectionTasks = tasks.filter(task => task.task_type === 'inspection')
 
   const softItems = lineItems.filter(i => i.section === 'soft')
   const hardItems = lineItems.filter(i => i.section === 'hard')
@@ -98,6 +112,17 @@ PROJECT OVERVIEW:
   Builder/GC: ${settings.builder || 'Marc David Homes'}
   Bank: ${settings.bank_name || 'FirstBank'}
   Loan Amount: ${settings.loan_amount ? fmt(settings.loan_amount) : 'Not set'}
+  Project Health: ${metrics.healthScore ?? 'Not calculated'}
+
+SCHEDULE SUMMARY:
+  Tasks: ${tasks.length}
+  Complete: ${completedTasks.length} (${metrics.schedule?.progressPercent ?? 0}%)
+  Blocked: ${blockedTasks.length}${blockedTasks.length ? ` (${blockedTasks.map(task => task.name).join(', ')})` : ''}
+  Inspection Gates: ${inspectionTasks.length}
+  Planned Finish: ${metrics.schedule?.finish || 'Not set'}
+
+PROJECT ACTIONS:
+${actions.slice(0, 12).map(action => `  - ${action.title}: ${action.detail}`).join('\n') || '  None recorded'}
 
 BUDGET SUMMARY:
   Total Estimated: ${fmt(totalEst)}
@@ -118,11 +143,20 @@ ${prepaidItems.slice(0, 10).map(i => `  ${i.description} — ${fmt(i.amount)} �
 DRAW SHEET HISTORY (${drawSheets.length} total):
 ${drawList}
 
+PROCUREMENT & DOCUMENTS:
+  Pending Bids: ${bids.filter(bid => bid.status === 'pending').length}
+  Accepted Bids: ${bids.filter(bid => bid.status === 'accepted').length}
+  TBD Selections: ${selections.filter(item => item.status === 'TBD').length}
+  Selected Items: ${selections.filter(item => item.status === 'SELECTED').length}
+  Plan Documents: ${plans.length}
+
 GUIDELINES:
 - Be direct and concise. Josh is a busy owner, not a developer.
 - Flag anything that looks off (overages, gaps, unusually high/low bids for Boulder).
 - When asked to draft text (bank letters, draw summaries, emails to subs), produce clean, ready-to-use copy.
 - Format dollar amounts as currency. Use bullet points sparingly.
 - If Josh asks about typical Boulder construction costs, use your knowledge to give honest ballparks.
-- Never make up budget numbers — always reference the data above.`
+- Never make up project facts or budget numbers — always reference the data above.
+- Distinguish verified project data from general construction advice.
+- When discussing sequencing, respect inspection gates and Monday-Friday workdays.`
 }

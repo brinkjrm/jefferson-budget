@@ -56,6 +56,20 @@ export async function replaceScheduleWithBlueprint(supabase, schedule, existingR
       .from('schedule_tasks').upsert(dependencyPayload).select()
     if (dependencyError) throw dependencyError
 
+    const metadataPayload = updatedTasks.map(row => {
+      const source = sourceByName.get(row.name)
+      return {
+        id: row.id,
+        task_type: source.type || 'work',
+        trade: source.trade || null,
+        references: source.references || null,
+      }
+    })
+    const { data: enrichedTasks, error: metadataError } = await supabase
+      .from('schedule_tasks').upsert(metadataPayload).select()
+    const finalTasks = metadataError && isMissingMetadataColumns(metadataError) ? updatedTasks : enrichedTasks
+    if (metadataError && !isMissingMetadataColumns(metadataError)) throw metadataError
+
     const oldChildren = existingRows.filter(row => row.parent_id).map(row => row.id)
     const oldPhases = existingRows.filter(row => !row.parent_id).map(row => row.id)
     if (oldChildren.length) {
@@ -67,9 +81,13 @@ export async function replaceScheduleWithBlueprint(supabase, schedule, existingR
       if (error) throw error
     }
 
-    return [...insertedPhases, ...updatedTasks]
+    return [...insertedPhases, ...finalTasks]
   } catch (error) {
     await rollback()
     throw error
   }
+}
+
+function isMissingMetadataColumns(error) {
+  return error?.code === 'PGRST204' || /task_type|trade|references|schema cache/i.test(error?.message || '')
 }

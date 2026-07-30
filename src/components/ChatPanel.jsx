@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { supabase } from '../lib/supabase.js'
+import { useProject } from '../context/ProjectContext.jsx'
 
 // ── Markdown-lite renderer (bold, bullets, line breaks) ───────────────────
 function renderMessage(text) {
@@ -27,27 +27,21 @@ function renderMessage(text) {
 
 // ── Suggested prompts ─────────────────────────────────────────────────────
 const SUGGESTIONS = [
-  'What are my biggest pending bids?',
-  'Flag any items that look over budget',
-  'Summarize the budget for my bank',
-  'What % of my budget is locked in?',
-  'Draft a cover note for my next draw',
+  'What needs my attention right now?',
+  'What work and inspections are coming next?',
+  'Flag anything at risk in the budget or schedule',
+  'Which selections are still unresolved?',
+  'Summarize the whole project for me',
 ]
 
 export default function ChatPanel() {
+  const { model, metrics, actions, loading: projectLoading } = useProject()
   const [open, setOpen]         = useState(false)
   const [messages, setMessages] = useState([])
   const [input, setInput]       = useState('')
   const [loading, setLoading]   = useState(false)
-  const [ctx, setCtx]           = useState(null)
-  const [ctxLoading, setCtxLoading] = useState(false)
   const bottomRef               = useRef(null)
   const inputRef                = useRef(null)
-
-  // Load budget context when panel opens for the first time
-  useEffect(() => {
-    if (open && !ctx && !ctxLoading) loadContext()
-  }, [open])
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -58,21 +52,6 @@ export default function ChatPanel() {
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 150)
   }, [open])
-
-  async function loadContext() {
-    setCtxLoading(true)
-    const [{ data: lineItems }, { data: prepaidItems }, { data: drawSheets }, { data: settingsRows }] =
-      await Promise.all([
-        supabase.from('line_items').select('*').order('sort_order'),
-        supabase.from('prepaid_items').select('*').order('created_at', { ascending: false }),
-        supabase.from('draw_sheets').select('*').order('draw_number', { ascending: false }),
-        supabase.from('settings').select('*'),
-      ])
-    const settings = {}
-    settingsRows?.forEach(r => { settings[r.key] = r.value })
-    setCtx({ lineItems: lineItems || [], prepaidItems: prepaidItems || [], drawSheets: drawSheets || [], settings })
-    setCtxLoading(false)
-  }
 
   async function send(text) {
     const userText = (text || input).trim()
@@ -89,7 +68,7 @@ export default function ChatPanel() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           messages: newMessages,
-          budgetContext: ctx,
+          projectContext: { model, metrics, actions },
         }),
       })
       const data = await res.json()
@@ -115,7 +94,7 @@ export default function ChatPanel() {
         onClick={() => setOpen(o => !o)}
         className="fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full shadow-2xl flex items-center justify-center transition-transform hover:scale-105 active:scale-95 no-print"
         style={{ background: open ? '#3a3a3c' : '#0a84ff' }}
-        title="Ask Claude about your budget"
+        title="Ask the project assistant"
       >
         <span className="text-2xl">{open ? '✕' : '✦'}</span>
       </button>
@@ -142,9 +121,9 @@ export default function ChatPanel() {
               <span className="text-white text-sm font-bold">✦</span>
             </div>
             <div>
-              <div className="text-white font-semibold text-sm">Budget Assistant</div>
-              <div className="text-xs" style={{ color: ctxLoading ? '#ff9f0a' : '#30d158' }}>
-                {ctxLoading ? 'Loading budget data…' : ctx ? `${ctx.lineItems?.length || 0} line items loaded` : 'Not connected'}
+              <div className="text-white font-semibold text-sm">Project Assistant</div>
+              <div className="text-xs" style={{ color: projectLoading ? '#ff9f0a' : '#30d158' }}>
+                {projectLoading ? 'Loading project data…' : `${model.schedule.tasks.length} tasks · ${model.financials.budgetItems.length} budget items`}
               </div>
             </div>
             {messages.length > 0 && (
@@ -160,10 +139,10 @@ export default function ChatPanel() {
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-            {messages.length === 0 && !ctxLoading && (
+            {messages.length === 0 && !projectLoading && (
               <div>
                 <p className="text-sm mb-3" style={{ color: '#8e8e93' }}>
-                  Ask me anything about the 3120 Jefferson budget — costs, bids, draws, or what to watch out for.
+                  Ask about the entire project — schedule, inspections, budget, bids, selections, draws, or documents.
                 </p>
                 <div className="space-y-2">
                   {SUGGESTIONS.map(s => (
@@ -250,7 +229,7 @@ export default function ChatPanel() {
               </button>
             </div>
             <p className="text-center mt-2 text-xs" style={{ color: '#3a3a3c' }}>
-              Powered by Claude · reads live budget data
+              Powered by Claude · reads the shared live project model
             </p>
           </div>
         </div>

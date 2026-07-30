@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase.js'
+import React, { useState } from 'react'
+import { useProject, useProjectCollection } from '../context/ProjectContext.jsx'
 
 const fmt = n => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0 })
 
@@ -21,22 +21,13 @@ const CAT_ICONS = {
 }
 
 export default function SelectionsTab() {
-  const [items,       setItems]       = useState([])
-  const [loading,     setLoading]     = useState(true)
+  const { createEntity, updateEntity, removeEntity } = useProject()
+  const [items, , loading]            = useProjectCollection('selections')
   const [statusFilter,setStatusFilter]= useState('ALL')
   const [search,      setSearch]      = useState('')
   const [editItem,    setEditItem]    = useState(null)
   const [expandedCat, setExpandedCat] = useState(new Set(CATEGORIES))
   const [toast,       setToast]       = useState(null)
-
-  useEffect(() => { load() }, [])
-
-  async function load() {
-    setLoading(true)
-    const { data } = await supabase.from('selections').select('*').order('sort_order')
-    setItems(data || [])
-    setLoading(false)
-  }
 
   function showToast(msg, type = 'success') {
     setToast({ msg, type })
@@ -54,8 +45,7 @@ export default function SelectionsTab() {
       notes:        fields.notes        || null,
       updated_at:   new Date().toISOString(),
     }
-    await supabase.from('selections').update(patch).eq('id', editItem.id)
-    setItems(prev => prev.map(i => i.id === editItem.id ? { ...i, ...patch } : i))
+    await updateEntity('selections', editItem.id, patch)
     setEditItem(null)
     showToast('Saved!')
   }
@@ -63,24 +53,25 @@ export default function SelectionsTab() {
   async function addItem(category, section) {
     const sectionItems = items.filter(i => i.category === category && (i.section || 'General') === section)
     const maxOrder = sectionItems.reduce((m, i) => Math.max(m, i.sort_order || 0), 0)
-    const { data, error } = await supabase.from('selections').insert({
-      category,
-      section,
-      room: '',
-      item_description: 'New Item',
-      qty: 1,
-      status: 'TBD',
-      sort_order: maxOrder + 1,
-    }).select().single()
-    if (error) { showToast('Error adding item', 'error'); return }
-    setItems(prev => [...prev, data])
-    setEditItem({ ...data })
+    try {
+      const data = await createEntity('selections', {
+        category,
+        section,
+        room: '',
+        item_description: 'New Item',
+        qty: 1,
+        status: 'TBD',
+        sort_order: maxOrder + 1,
+      })
+      setEditItem({ ...data })
+    } catch {
+      showToast('Error adding item', 'error')
+    }
   }
 
   async function deleteItem(id) {
     if (!confirm('Delete this selection item?')) return
-    await supabase.from('selections').delete().eq('id', id)
-    setItems(prev => prev.filter(i => i.id !== id))
+    await removeEntity('selections', id)
     setEditItem(null)
     showToast('Deleted')
   }

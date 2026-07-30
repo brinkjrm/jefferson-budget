@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { supabase, uploadPlan } from '../lib/supabase.js'
+import React, { useState, useRef } from 'react'
+import { useProject, useProjectCollection } from '../context/ProjectContext.jsx'
+import { uploadPlan } from '../lib/supabase.js'
 
 function fmtSize(bytes) {
   if (!bytes) return ''
@@ -13,8 +14,8 @@ function fmtDate(iso) {
 }
 
 export default function PlansTab() {
-  const [plans,       setPlans]       = useState([])
-  const [loading,     setLoading]     = useState(true)
+  const { createEntity, updateEntity, removeEntity } = useProject()
+  const [plans, , loading]            = useProjectCollection('plans')
   const [selected,    setSelected]    = useState(null)
   const [uploading,   setUploading]   = useState(false)
   const [dragging,    setDragging]    = useState(false)
@@ -25,15 +26,6 @@ export default function PlansTab() {
   const [renamingId,  setRenamingId]  = useState(null)
   const [renameVal,   setRenameVal]   = useState('')
   const fileRef = useRef()
-
-  useEffect(() => { load() }, [])
-
-  async function load() {
-    setLoading(true)
-    const { data } = await supabase.from('plans').select('*').order('created_at', { ascending: false })
-    setPlans(data || [])
-    setLoading(false)
-  }
 
   function showToast(msg, type = 'success') {
     setToast({ msg, type })
@@ -47,13 +39,11 @@ export default function PlansTab() {
     try {
       const { publicUrl } = await uploadPlan(pdf)
       const name = pdf.name.replace(/\.pdf$/i, '').replace(/[-_]/g, ' ')
-      const { data, error } = await supabase.from('plans').insert({
+      const data = await createEntity('plans', {
         name,
         file_url: publicUrl,
         file_size: pdf.size,
-      }).select().single()
-      if (error) throw error
-      setPlans(prev => [data, ...prev])
+      })
       setSelected(data)
       setAnswer(null)
       showToast('Plan uploaded!')
@@ -66,8 +56,7 @@ export default function PlansTab() {
 
   async function deletePlan(plan) {
     if (!confirm(`Delete "${plan.name}"?`)) return
-    await supabase.from('plans').delete().eq('id', plan.id)
-    setPlans(prev => prev.filter(p => p.id !== plan.id))
+    await removeEntity('plans', plan.id)
     if (selected?.id === plan.id) { setSelected(null); setAnswer(null) }
     showToast('Deleted')
   }
@@ -75,8 +64,7 @@ export default function PlansTab() {
   async function saveName(plan) {
     const name = renameVal.trim()
     if (!name) return setRenamingId(null)
-    await supabase.from('plans').update({ name }).eq('id', plan.id)
-    setPlans(prev => prev.map(p => p.id === plan.id ? { ...p, name } : p))
+    await updateEntity('plans', plan.id, { name })
     if (selected?.id === plan.id) setSelected(p => ({ ...p, name }))
     setRenamingId(null)
   }

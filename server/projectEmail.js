@@ -8,7 +8,7 @@ const URGENCIES = new Set(['critical', 'important', 'routine'])
 
 export async function syncProjectInbox({ supabase, lookbackDays = 3, maxMessages = 75 }) {
   const mailbox = mailboxConfiguration()
-  if (!mailbox.address || !mailbox.password) {
+  if (!mailbox.address || !mailbox.username || !mailbox.password) {
     throw new Error('Project mailbox credentials are not configured')
   }
 
@@ -17,7 +17,7 @@ export async function syncProjectInbox({ supabase, lookbackDays = 3, maxMessages
     host: mailbox.host,
     port: mailbox.port,
     secure: mailbox.secure,
-    auth: { user: mailbox.address, pass: mailbox.password },
+    auth: { user: mailbox.username, pass: mailbox.password },
     logger: false,
   })
   const imported = []
@@ -121,8 +121,10 @@ export async function syncProjectInbox({ supabase, lookbackDays = 3, maxMessages
 }
 
 export function mailboxConfiguration() {
+  const address = process.env.PROJECT_EMAIL_ADDRESS || ''
   return {
-    address: process.env.PROJECT_EMAIL_ADDRESS || '',
+    address,
+    username: process.env.PROJECT_EMAIL_USERNAME || address,
     password: process.env.PROJECT_EMAIL_APP_PASSWORD || '',
     host: process.env.PROJECT_EMAIL_IMAP_HOST || 'imap.mail.me.com',
     port: Number(process.env.PROJECT_EMAIL_IMAP_PORT || 993),

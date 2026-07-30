@@ -5,6 +5,7 @@ The daily job checks the dedicated project mailbox, extracts invoice drafts and 
 ## Vercel environment variables
 
 - `PROJECT_EMAIL_ADDRESS` — dedicated project mailbox address
+- `PROJECT_EMAIL_USERNAME` — optional IMAP login; for an iCloud custom-domain address, use the primary iCloud Mail address or username
 - `PROJECT_EMAIL_APP_PASSWORD` — mailbox app password, never the normal sign-in password
 - `PROJECT_EMAIL_IMAP_HOST` — optional; defaults to `imap.mail.me.com`
 - `PROJECT_EMAIL_IMAP_PORT` — optional; defaults to `993`

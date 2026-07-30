@@ -8,6 +8,10 @@ const ProjectContext = createContext(null)
 const EMPTY_COLLECTIONS = Object.fromEntries(Object.keys(COLLECTION_SPECS).map(key => [key, []]))
 const REQUIRED_KEYS = Object.entries(COLLECTION_SPECS).filter(([, spec]) => !spec.optional).map(([key]) => key)
 const OPTIONAL_KEYS = Object.entries(COLLECTION_SPECS).filter(([, spec]) => spec.optional).map(([key]) => key)
+const PROJECT_SCOPED_KEYS = new Set([
+  'buildings', 'areas', 'projectEvents', 'projectLinks', 'lineItems', 'prepaidItems',
+  'drawSheets', 'drawItems', 'scheduleTasks', 'bids', 'contractors', 'selections', 'plans',
+])
 let initialRequiredLoad = null
 
 export function ProjectProvider({ children }) {
@@ -88,14 +92,18 @@ export function ProjectProvider({ children }) {
   }, [availability.projectEvents, collections.projects, repository, setCollection])
 
   const createEntity = useCallback(async (key, values, event) => {
-    const saved = await repository.create(key, values)
+    const projectId = collections.projects[0]?.id
+    const scopedValues = PROJECT_SCOPED_KEYS.has(key) && projectId && values.project_id == null
+      ? { ...values, project_id: projectId }
+      : values
+    const saved = await repository.create(key, scopedValues)
     setCollection(key, previous => [saved, ...previous])
     await recordEvent(event || {
       type: `${key}.created`, entityType: key, entityId: saved.id,
       summary: `Created ${saved.name || saved.description || saved.item_description || key}`,
     })
     return saved
-  }, [repository, setCollection, recordEvent])
+  }, [collections.projects, repository, setCollection, recordEvent])
 
   const updateEntity = useCallback(async (key, id, patch, event) => {
     const saved = await repository.update(key, id, patch)

@@ -80,6 +80,14 @@ WHERE p.name = 'Jefferson Remodel'
     WHERE existing.project_id = p.id AND existing.name = building.name
   );
 
+CREATE OR REPLACE FUNCTION public.default_project_id()
+RETURNS UUID
+LANGUAGE SQL
+STABLE
+AS $$
+  SELECT id FROM public.projects WHERE status = 'active' ORDER BY created_at LIMIT 1
+$$;
+
 DO $$
 DECLARE
   table_name TEXT;
@@ -93,6 +101,8 @@ BEGIN
     IF to_regclass('public.' || table_name) IS NOT NULL THEN
       EXECUTE format('ALTER TABLE %I ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES projects(id) ON DELETE CASCADE', table_name);
       EXECUTE format('UPDATE %I SET project_id = $1 WHERE project_id IS NULL', table_name) USING default_project;
+      EXECUTE format('ALTER TABLE %I ALTER COLUMN project_id SET DEFAULT public.default_project_id()', table_name);
+      EXECUTE format('ALTER TABLE %I ALTER COLUMN project_id SET NOT NULL', table_name);
       EXECUTE format('CREATE INDEX IF NOT EXISTS %I ON %I(project_id)', 'idx_' || table_name || '_project_id', table_name);
     END IF;
   END LOOP;

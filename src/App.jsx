@@ -22,7 +22,7 @@ const TABS = [
 ]
 
 export default function App() {
-  const [tab, setTab]           = useState('Budget')
+  const [tab, setTab]           = useState('Schedule')
   const [settings, setSettings] = useState({
     bank_name: 'FirstBank',
     borrower: 'Josh Meyer',
@@ -67,7 +67,7 @@ export default function App() {
               <h1 className="text-white font-bold tracking-tight" style={{ fontSize: 17 }}>
                 3120 Jefferson St
               </h1>
-              <p className="text-lbl2 text-xs tracking-wide">Budget Manager</p>
+              <p className="text-lbl2 text-xs tracking-wide">Construction Manager</p>
             </div>
             <div className="flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full"

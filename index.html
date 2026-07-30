@@ -105,7 +105,42 @@
 
     tr:hover td, .data-row:hover { background: rgba(255,255,255,0.04) !important; }
 
-    @media print { .no-print { display: none !important; } }
+    .schedule-print { display: none; }
+
+    @media print {
+      @page { size: landscape; margin: 0.42in; }
+      body { background: #fff !important; color: #111 !important; }
+      body > #root > div > header,
+      body > #root > div > main > :not(:has(.schedule-print)),
+      body > #root > div > div,
+      .schedule-screen,
+      .no-print { display: none !important; }
+      body > #root > div > main { max-width: none !important; padding: 0 !important; }
+      .schedule-print { display: block !important; color: #111; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+      .schedule-print .print-header { display: flex; align-items: flex-end; justify-content: space-between; border-bottom: 2px solid #111; padding-bottom: 10px; margin-bottom: 9px; }
+      .schedule-print h1 { margin: 0; font-size: 22px; line-height: 1.1; }
+      .schedule-print .print-header p { margin: 4px 0 0; color: #444; font-size: 11px; }
+      .schedule-print .print-dates { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 11px; }
+      .schedule-print .print-dates span { color: #555; font-size: 9px; }
+      .schedule-print .print-note { margin: 0 0 10px; padding: 7px 9px; background: #f2f3f5; border: 1px solid #d8dadd; border-radius: 4px; font-size: 8px; line-height: 1.35; }
+      .schedule-print section { break-inside: auto; margin-bottom: 10px; }
+      .schedule-print h2 { break-after: avoid; margin: 0 0 3px; padding: 4px 7px; border-left: 5px solid #0a84ff; background: #eceef1; font-size: 11px; line-height: 1.1; }
+      .schedule-print table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7px; line-height: 1.2; }
+      .schedule-print thead { display: table-header-group; }
+      .schedule-print tr { break-inside: avoid; }
+      .schedule-print th { padding: 3px 4px; text-align: left; color: #444; background: #f7f7f7; border: 1px solid #cfd2d6; font-size: 6.5px; text-transform: uppercase; letter-spacing: .03em; }
+      .schedule-print td { padding: 3px 4px; vertical-align: top; border: 1px solid #d8dadd; overflow-wrap: anywhere; }
+      .schedule-print th:nth-child(1), .schedule-print td:nth-child(1) { width: 21%; }
+      .schedule-print th:nth-child(2), .schedule-print td:nth-child(2) { width: 11%; }
+      .schedule-print th:nth-child(3), .schedule-print td:nth-child(3),
+      .schedule-print th:nth-child(4), .schedule-print td:nth-child(4) { width: 9%; white-space: nowrap; }
+      .schedule-print th:nth-child(5), .schedule-print td:nth-child(5) { width: 4%; text-align: center; }
+      .schedule-print th:nth-child(6), .schedule-print td:nth-child(6) { width: 29%; }
+      .schedule-print th:nth-child(7), .schedule-print td:nth-child(7) { width: 17%; }
+      .schedule-print .inspection-row td { background: #fff8e8; }
+      .schedule-print .inspection-label { color: #9a5800; font-size: 6px; white-space: nowrap; }
+      .schedule-print .print-footer { margin-top: 12px; padding-top: 5px; border-top: 1px solid #bbb; color: #666; text-align: right; font-size: 7px; }
+    }
   </style>
 </head>
 <body>

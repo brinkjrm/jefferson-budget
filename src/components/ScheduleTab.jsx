@@ -1,21 +1,47 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
+import { buildJeffersonSchedule, getJeffersonTaskMetadata } from '../data/jeffersonSchedule.js'
+import {
+  addCalendarDays,
+  addWorkdays,
+  diffCalendarDays,
+  enforceDependencies,
+  formatShortDate,
+  hasDependencyCycle,
+  maxDate,
+  minDate,
+  normalizeWorkday,
+  parseDate,
+  rollupPhaseDates,
+  shiftWorkdayRange,
+  startOfWeek,
+  toDateString,
+  workdayDuration,
+} from '../lib/scheduleDates.js'
+import { replaceScheduleWithBlueprint } from '../lib/scheduleRepository.js'
 import { supabase } from '../lib/supabase.js'
 
-const ROW_H  = 40
-const HDR_H  = 52
-const LIST_W = 280
-
-const ZOOM_LEVELS  = [24, 32, 48, 64, 96]
+const ROW_H = 48
+const HDR_H = 58
+const LIST_W = 360
+const ZOOM_LEVELS = [28, 36, 48, 64, 96]
 const ZOOM_DEFAULT = 2
 
 const STATUS_MAP = {
   not_started: { label: 'Not Started', color: '#8E8E93' },
-  in_progress:  { label: 'In Progress',  color: '#0a84ff' },
-  complete:     { label: 'Complete',     color: '#30d158' },
-  blocked:      { label: 'Blocked',      color: '#ff453a' },
+  in_progress: { label: 'In Progress', color: '#0a84ff' },
+  complete: { label: 'Complete', color: '#30d158' },
+  blocked: { label: 'Blocked', color: '#ff453a' },
 }
 
-const PHASE_COLORS = ['#0a84ff','#30d158','#ff9f0a','#bf5af2','#32ade6','#ff6b6b','#ffd60a','#5e5ce6']
+const TYPE_MAP = {
+  inspection: { label: 'Inspection', color: '#ff9f0a' },
+  milestone: { label: 'Milestone', color: '#30d158' },
+  procurement: { label: 'Procurement', color: '#bf5af2' },
+  wait: { label: 'Cure / Wait', color: '#8e8e93' },
+  allowance: { label: 'Allowance', color: '#ffd60a' },
+}
+
+const PHASE_COLORS = ['#0a84ff', '#30d158', '#ff9f0a', '#bf5af2', '#32ade6', '#ff6b6b', '#ffd60a', '#5e5ce6']
 
 function hexToRgba(hex, alpha) {
   const h = hex.replace('#', '')
@@ -25,101 +51,152 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`
 }
 
-// ── House build template ──────────────────────────────────────────────────────
-const HOUSE_TEMPLATE = [
-  { name: 'Pre-Construction',        color: '#5e5ce6', duration: 28, tasks: ['Permits & approvals', 'Site survey', 'Final plan review', 'Utility locates', 'Builder contract finalized'] },
-  { name: 'Demolition & Abatement', color: '#ff453a', duration: 14, tasks: ['Asbestos testing', 'Asbestos abatement', 'Lead paint testing & abatement', 'Hazmat removal & disposal', 'Interior demolition', 'Structural demolition', 'Debris removal & haul-off'] },
-  { name: 'Site Work & Excavation',  color: '#32ade6', duration: 14, tasks: ['Clearing & grubbing', 'Rough grading', 'Excavation', 'Erosion control install'] },
-  { name: 'Crawlspace Foundation',   color: '#ff9f0a', duration: 14, tasks: ['Layout & footing excavation', 'Footing pour', 'Foundation walls / piers', 'Waterproofing & drainage', 'Crawlspace insulation', 'Backfill & rough grade'] },
-  { name: 'Framing',                color: '#0a84ff', duration: 21, tasks: ['Floor system (beams, joists, subfloor)', 'Exterior wall framing', 'Interior wall framing', 'Roof framing', 'Roof & wall sheathing', 'Windows & exterior doors (rough)'] },
-  { name: 'Roofing',                color: '#ff453a', duration: 7,  tasks: ['Underlayment & ice/water shield', 'Roofing installation', 'Gutters & downspouts'] },
-  { name: 'Exterior',               color: '#30d158', duration: 21, tasks: ['House wrap / WRB', 'Siding installation', 'Exterior trim', 'Exterior paint / stain'] },
-  { name: 'Rough MEP',              color: '#bf5af2', duration: 21, tasks: ['Plumbing rough-in', 'HVAC rough-in & ductwork', 'Electrical rough-in', 'Low voltage & data rough-in', 'Rough MEP inspections'] },
-  { name: 'Insulation',             color: '#ffd60a', duration: 7,  tasks: ['Wall insulation', 'Attic / ceiling insulation', 'Blower door test'] },
-  { name: 'Drywall',                color: '#ff6b6b', duration: 14, tasks: ['Hang drywall', 'Tape, mud & sand', 'Prime'] },
-  { name: 'Interior Finish',        color: '#0a84ff', duration: 35, tasks: ['Interior doors & trim installation', 'Cabinet installation', 'Countertops', 'Interior paint'] },
-  { name: 'Flooring',               color: '#30d158', duration: 14, tasks: ['Hardwood / LVP installation', 'Tile (baths & kitchen)', 'Carpet'] },
-  { name: 'Final Trades',           color: '#bf5af2', duration: 21, tasks: ['Plumbing fixtures & trim', 'HVAC equipment & grilles', 'Electrical fixtures & devices', 'Appliance installation', 'Hardware & accessories'] },
-  { name: 'Standalone Garage',      color: '#ff9f0a', duration: 28, tasks: ['Garage foundation / slab', 'Garage framing', 'Garage roofing', 'Garage door & openers', 'Garage electrical'] },
-  { name: 'Site Finish',            color: '#32ade6', duration: 14, tasks: ['Final grading', 'Driveway & walkways', 'Landscaping / seeding', 'Exterior lighting'] },
-  { name: 'Punch List & Closeout',  color: '#ff6b6b', duration: 14, tasks: ['Final inspections', 'Punch list', 'Certificate of occupancy', 'Final cleaning', 'Owner walkthrough'] },
-]
-
-// ── Date helpers ──────────────────────────────────────────────────────────────
-const toStr    = d => d.toISOString().split('T')[0]
-const parse    = s => { if (!s) return null; const [y,m,d]=s.split('-').map(Number); return new Date(y,m-1,d) }
-const addDays  = (d,n) => { const r=new Date(d); r.setDate(r.getDate()+n); return r }
-const diffDays = (a,b) => Math.round((b-a)/86400000)
-const weekStart= d => { const r=new Date(d); r.setDate(r.getDate()-r.getDay()); r.setHours(0,0,0,0); return r }
-const fmtDate  = s => s ? parse(s).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : ''
-
 function getMonthGroups(weeks) {
   const groups = []
-  let cur = null
-  weeks.forEach((w, i) => {
-    const label = w.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
-    if (label !== cur) { groups.push({ label, start: i, count: 1 }); cur = label }
-    else groups[groups.length - 1].count++
+  let current = null
+  weeks.forEach((week, index) => {
+    const label = week.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
+    if (label !== current) {
+      groups.push({ label, start: index, count: 1 })
+      current = label
+    } else {
+      groups[groups.length - 1].count++
+    }
   })
   return groups
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
+function sameTask(a, b) {
+  const fields = ['name', 'parent_id', 'start_date', 'end_date', 'status', 'sort_order', 'color']
+  return fields.every(field => a?.[field] === b?.[field])
+    && JSON.stringify(a?.depends_on || []) === JSON.stringify(b?.depends_on || [])
+}
+
+function csvCell(value) {
+  return `"${String(value ?? '').replaceAll('"', '""')}"`
+}
+
 export default function ScheduleTab() {
-  const [tasks,      setTasks]      = useState([])
-  const [loading,    setLoading]    = useState(true)
-  const [loadingTpl, setLoadingTpl] = useState(false)
-  const [collapsed,  setCollapsed]  = useState(new Set())
-  const [editingId,  setEditingId]  = useState(null)
+  const [tasks, setTasks] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [loadingTemplate, setLoadingTemplate] = useState(false)
+  const [collapsed, setCollapsed] = useState(new Set())
+  const [editingId, setEditingId] = useState(null)
   const [editFields, setEditFields] = useState({})
-  const [drag,       setDrag]       = useState(null)   // gantt bar drag
-  const [reorder,    setReorder]    = useState(null)   // row reorder drag
-  const [hoveredId,  setHoveredId]  = useState(null)
-  const [zoomIdx,    setZoomIdx]    = useState(ZOOM_DEFAULT)
+  const [drag, setDrag] = useState(null)
+  const [reorder, setReorder] = useState(null)
+  const [hoveredId, setHoveredId] = useState(null)
+  const [zoomIndex, setZoomIndex] = useState(ZOOM_DEFAULT)
+  const [notice, setNotice] = useState(null)
 
-  const weekW   = ZOOM_LEVELS[zoomIdx]
-  const dayW    = weekW / 7
-  const dayWRef = useRef(dayW)
-  useEffect(() => { dayWRef.current = dayW }, [dayW])
-
-  const tasksRef    = useRef(tasks)
+  const weekWidth = ZOOM_LEVELS[zoomIndex]
+  const dayWidth = weekWidth / 7
+  const dayWidthRef = useRef(dayWidth)
+  const tasksRef = useRef(tasks)
   const flatListRef = useRef([])
+
+  useEffect(() => { dayWidthRef.current = dayWidth }, [dayWidth])
   useEffect(() => { tasksRef.current = tasks }, [tasks])
-
   useEffect(() => { load() }, [])
-
-  // ── Gantt bar drag ────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!drag) return
-    const onMove = e => {
-      const days = Math.round((e.clientX - drag.startX) / dayWRef.current)
+    if (!notice) return undefined
+    const timer = setTimeout(() => setNotice(null), 5000)
+    return () => clearTimeout(timer)
+  }, [notice])
+
+  async function load() {
+    setLoading(true)
+    const { data, error } = await supabase.from('schedule_tasks').select('*').order('sort_order').order('created_at')
+    if (error) {
+      setNotice({ type: 'error', text: `Could not load schedule: ${error.message}` })
+    } else {
+      setTasks(data || [])
+    }
+    setLoading(false)
+  }
+
+  async function persistTasks(candidateTasks, changedIds, successText = 'Schedule saved') {
+    if (hasDependencyCycle(candidateTasks)) {
+      setNotice({ type: 'error', text: 'Dependency cycle detected. Remove the circular predecessor before saving.' })
+      await load()
+      return false
+    }
+
+    const enforced = enforceDependencies(candidateTasks, changedIds)
+    const rolled = rollupPhaseDates(enforced.tasks)
+    const before = new Map(tasksRef.current.map(task => [task.id, task]))
+    const changed = rolled.filter(task => !sameTask(task, before.get(task.id)))
+    if (!changed.length) {
+      setTasks(rolled)
+      return true
+    }
+
+    const payload = changed.map(task => ({
+      id: task.id,
+      name: task.name,
+      parent_id: task.parent_id,
+      start_date: task.start_date,
+      end_date: task.end_date,
+      status: task.status || 'not_started',
+      sort_order: task.sort_order || 0,
+      color: task.color || null,
+      depends_on: task.depends_on || [],
+      updated_at: new Date().toISOString(),
+    }))
+    const { error } = await supabase.from('schedule_tasks').upsert(payload)
+    if (error) {
+      setNotice({ type: 'error', text: `Save failed: ${error.message}` })
+      await load()
+      return false
+    }
+    tasksRef.current = rolled
+    setTasks(rolled)
+    setNotice({ type: 'success', text: successText })
+    return true
+  }
+
+  async function updateTask(id, patch, successText) {
+    const candidate = tasksRef.current.map(task => task.id === id ? { ...task, ...patch } : task)
+    return persistTasks(candidate, [id], successText)
+  }
+
+  useEffect(() => {
+    if (!drag) return undefined
+    const onMove = event => {
+      const calendarDelta = Math.round((event.clientX - drag.startX) / dayWidthRef.current)
+      let range
       if (drag.type === 'resize') {
-        const newEnd = toStr(addDays(parse(drag.origEnd), days))
-        if (newEnd >= drag.origStart)
-          setTasks(prev => prev.map(t => t.id === drag.taskId ? { ...t, end_date: newEnd } : t))
+        const rawEnd = addCalendarDays(drag.originalEnd, calendarDelta)
+        const end = normalizeWorkday(rawEnd, calendarDelta < 0 ? -1 : 1)
+        if (end < parseDate(drag.originalStart)) return
+        range = { start_date: drag.originalStart, end_date: toDateString(end) }
       } else {
-        const newStart = toStr(addDays(parse(drag.origStart), days))
-        const dur = diffDays(parse(drag.origStart), parse(drag.origEnd))
-        setTasks(prev => prev.map(t => t.id === drag.taskId ? { ...t, start_date: newStart, end_date: toStr(addDays(parse(newStart), dur)) } : t))
+        range = shiftWorkdayRange(drag.originalStart, drag.originalEnd, calendarDelta)
       }
+      setTasks(previous => {
+        const next = previous.map(task => task.id === drag.taskId ? { ...task, ...range } : task)
+        tasksRef.current = next
+        return next
+      })
     }
     const onUp = async () => {
-      const task = tasksRef.current.find(t => t.id === drag.taskId)
-      if (task) await updateTask(drag.taskId, { start_date: task.start_date, end_date: task.end_date })
+      await persistTasks(tasksRef.current, [drag.taskId], 'Task dates and downstream dependencies updated')
       setDrag(null)
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
   }, [drag])
 
-  // ── Row reorder drag ──────────────────────────────────────────────────────
   useEffect(() => {
-    if (!reorder) return
-    const onMove = e => {
-      const delta = Math.round((e.clientY - reorder.startY) / ROW_H)
-      const targetIdx = Math.max(0, Math.min(flatListRef.current.length - 1, reorder.startFlatIdx + delta))
-      setReorder(r => ({ ...r, targetFlatIdx: targetIdx }))
+    if (!reorder) return undefined
+    const onMove = event => {
+      const delta = Math.round((event.clientY - reorder.startY) / ROW_H)
+      const targetFlatIndex = Math.max(0, Math.min(flatListRef.current.length - 1, reorder.startFlatIndex + delta))
+      setReorder(value => ({ ...value, targetFlatIndex }))
     }
     const onUp = async () => {
       await finishReorder(reorder)
@@ -127,526 +204,497 @@ export default function ScheduleTab() {
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
-    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
   }, [reorder])
 
-  async function finishReorder(ro) {
-    const fl = flatListRef.current
-    if (!fl.length || ro.startFlatIdx === ro.targetFlatIdx) return
-    const { taskId, isPhase, parentId, targetFlatIdx } = ro
-    const target = fl[targetFlatIdx]
+  async function finishReorder(value) {
+    const flat = flatListRef.current
+    if (!flat.length || value.startFlatIndex === value.targetFlatIndex) return
+    const target = flat[value.targetFlatIndex]
     if (!target) return
+    let candidate = tasksRef.current.map(task => ({ ...task }))
+    const changedIds = []
 
-    if (isPhase) {
-      // Reorder phases among top-level phases
-      const allPhases = tasksRef.current.filter(t => !t.parent_id).sort((a,b) => (a.sort_order||0)-(b.sort_order||0))
+    if (value.isPhase) {
+      const phases = candidate.filter(task => !task.parent_id).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
       const targetPhaseId = target.isPhase ? target.task.id : target.task.parent_id
-      const fromIdx = allPhases.findIndex(p => p.id === taskId)
-      const toIdx   = allPhases.findIndex(p => p.id === targetPhaseId)
-      if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return
-      const reordered = [...allPhases]
-      const [removed] = reordered.splice(fromIdx, 1)
-      reordered.splice(toIdx, 0, removed)
-      await Promise.all(reordered.map((p, i) => updateTask(p.id, { sort_order: i + 1 })))
-    } else if (target.isPhase) {
-      // Nest task as last child of the target phase
-      const newParentId = target.task.id
-      const siblings = tasksRef.current.filter(t => t.parent_id === newParentId)
-      const newOrder = siblings.reduce((m, t) => Math.max(m, t.sort_order||0), 0) + 1
-      await updateTask(taskId, { parent_id: newParentId, sort_order: newOrder })
-    } else if (target.task.parent_id !== parentId) {
-      // Move task to a different phase (drop on a sibling in another phase)
-      const newParentId = target.task.parent_id
-      const siblings = tasksRef.current.filter(t => t.parent_id === newParentId)
-      const newOrder = siblings.reduce((m, t) => Math.max(m, t.sort_order||0), 0) + 1
-      await updateTask(taskId, { parent_id: newParentId, sort_order: newOrder })
+      const fromIndex = phases.findIndex(phase => phase.id === value.taskId)
+      const toIndex = phases.findIndex(phase => phase.id === targetPhaseId)
+      if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return
+      const [removed] = phases.splice(fromIndex, 1)
+      phases.splice(toIndex, 0, removed)
+      const orders = new Map(phases.map((phase, index) => [phase.id, index + 1]))
+      candidate = candidate.map(task => orders.has(task.id) ? { ...task, sort_order: orders.get(task.id) } : task)
+      changedIds.push(...phases.map(phase => phase.id))
     } else {
-      // Reorder within same parent
-      const siblings = tasksRef.current.filter(t => t.parent_id === parentId).sort((a,b) => (a.sort_order||0)-(b.sort_order||0))
-      const fromIdx = siblings.findIndex(t => t.id === taskId)
-      const toIdx   = siblings.findIndex(t => t.id === target.task.id)
-      if (fromIdx === -1 || toIdx === -1 || fromIdx === toIdx) return
-      const reordered = [...siblings]
-      const [removed] = reordered.splice(fromIdx, 1)
-      reordered.splice(toIdx, 0, removed)
-      await Promise.all(reordered.map((t, i) => updateTask(t.id, { sort_order: i + 1 })))
+      const newParentId = target.isPhase ? target.task.id : target.task.parent_id
+      if (!newParentId) return
+      const siblings = candidate
+        .filter(task => task.parent_id === newParentId && task.id !== value.taskId)
+        .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+      const targetIndex = target.isPhase ? siblings.length : Math.max(0, siblings.findIndex(task => task.id === target.task.id))
+      const moved = candidate.find(task => task.id === value.taskId)
+      siblings.splice(targetIndex < 0 ? siblings.length : targetIndex, 0, { ...moved, parent_id: newParentId })
+      const updates = new Map(siblings.map((task, index) => [task.id, { parent_id: newParentId, sort_order: index + 1 }]))
+      candidate = candidate.map(task => updates.has(task.id) ? { ...task, ...updates.get(task.id) } : task)
+      changedIds.push(...siblings.map(task => task.id))
     }
+    await persistTasks(candidate, changedIds, 'Schedule order updated')
   }
 
-  async function load() {
-    setLoading(true)
-    const { data } = await supabase.from('schedule_tasks').select('*').order('sort_order').order('created_at')
-    setTasks(data || [])
-    setLoading(false)
-  }
-
-  async function updateTask(id, patch) {
-    patch.updated_at = new Date().toISOString()
-    await supabase.from('schedule_tasks').update(patch).eq('id', id)
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, ...patch } : t))
-  }
-
-  async function applyTemplate() {
-    if (!confirm('Add a standard 4BR/2BA ranch house build schedule? This adds to any existing items.')) return
-    setLoadingTpl(true)
-    let phaseOrder = tasksRef.current.filter(t => !t.parent_id).reduce((m,t) => Math.max(m, t.sort_order||0), 0)
-    let cursor = new Date()
-    for (const tpl of HOUSE_TEMPLATE) {
-      phaseOrder++
-      const start = toStr(cursor)
-      const end   = toStr(addDays(cursor, tpl.duration - 1))
-      const { data: phase } = await supabase.from('schedule_tasks')
-        .insert({ name: tpl.name, start_date: start, end_date: end, status: 'not_started', sort_order: phaseOrder, color: tpl.color, depends_on: [] })
-        .select().single()
-      if (phase) {
-        const { data: children } = await supabase.from('schedule_tasks')
-          .insert(tpl.tasks.map((name, i) => ({ name, parent_id: phase.id, start_date: start, end_date: end, status: 'not_started', sort_order: i + 1, depends_on: [] })))
-          .select()
-        setTasks(prev => [...prev, phase, ...(children || [])])
-      }
-      cursor = addDays(cursor, tpl.duration)
+  async function applyPermitSchedule() {
+    const message = tasksRef.current.length
+      ? 'Replace the current schedule with the plan-validated Jefferson permit schedule? Existing schedule rows will be replaced.'
+      : 'Load the plan-validated Jefferson permit schedule?'
+    if (!window.confirm(message)) return
+    setLoadingTemplate(true)
+    try {
+      const blueprint = buildJeffersonSchedule()
+      const rows = await replaceScheduleWithBlueprint(supabase, blueprint, tasksRef.current)
+      tasksRef.current = rows
+      setTasks(rows)
+      setCollapsed(new Set())
+      setEditingId(null)
+      setNotice({ type: 'success', text: `Permit schedule loaded: ${blueprint.tasks.length} tasks, ${blueprint.projectStart} to ${blueprint.projectEnd}` })
+    } catch (error) {
+      setNotice({ type: 'error', text: `Could not load permit schedule: ${error.message}` })
+      await load()
+    } finally {
+      setLoadingTemplate(false)
     }
-    setLoadingTpl(false)
   }
 
   async function addPhase() {
-    const today = toStr(new Date())
-    const end   = toStr(addDays(new Date(), 13))
-    const phases = tasks.filter(t => !t.parent_id)
-    const maxOrder = phases.reduce((m, t) => Math.max(m, t.sort_order||0), 0)
+    const start = toDateString(normalizeWorkday(new Date()))
+    const end = toDateString(addWorkdays(start, 9))
+    const phases = tasksRef.current.filter(task => !task.parent_id)
     const color = PHASE_COLORS[phases.length % PHASE_COLORS.length]
-    const { data } = await supabase.from('schedule_tasks')
-      .insert({ name: 'New Phase', start_date: today, end_date: end, status: 'not_started', sort_order: maxOrder + 1, color, depends_on: [] })
-      .select().single()
-    if (data) { setTasks(prev => [...prev, data]); openEdit(data) }
+    const { data, error } = await supabase.from('schedule_tasks').insert({
+      name: 'New Phase', start_date: start, end_date: end, status: 'not_started',
+      sort_order: phases.reduce((max, task) => Math.max(max, task.sort_order || 0), 0) + 1,
+      color, depends_on: [],
+    }).select().single()
+    if (error) return setNotice({ type: 'error', text: `Could not add phase: ${error.message}` })
+    const next = [...tasksRef.current, data]
+    tasksRef.current = next
+    setTasks(next)
+    openEdit(data)
   }
 
   async function addTask(parentId) {
-    const parent = tasks.find(t => t.id === parentId)
-    const today  = parent?.start_date || toStr(new Date())
-    const end    = parent?.end_date   || toStr(addDays(parse(today), 6))
-    const siblings = tasks.filter(t => t.parent_id === parentId)
-    const maxOrder = siblings.reduce((m, t) => Math.max(m, t.sort_order||0), 0)
-    const { data } = await supabase.from('schedule_tasks')
-      .insert({ name: 'New Task', parent_id: parentId, start_date: today, end_date: end, status: 'not_started', sort_order: maxOrder + 1, depends_on: [] })
-      .select().single()
-    if (data) { setTasks(prev => [...prev, data]); openEdit(data) }
+    const parent = tasksRef.current.find(task => task.id === parentId)
+    const start = toDateString(normalizeWorkday(parent?.start_date || new Date()))
+    const siblings = tasksRef.current.filter(task => task.parent_id === parentId)
+    const { data, error } = await supabase.from('schedule_tasks').insert({
+      name: 'New Task', parent_id: parentId, start_date: start, end_date: toDateString(addWorkdays(start, 4)),
+      status: 'not_started', sort_order: siblings.reduce((max, task) => Math.max(max, task.sort_order || 0), 0) + 1,
+      depends_on: [],
+    }).select().single()
+    if (error) return setNotice({ type: 'error', text: `Could not add task: ${error.message}` })
+    const next = rollupPhaseDates([...tasksRef.current, data])
+    tasksRef.current = next
+    setTasks(next)
+    openEdit(data)
   }
 
   async function deleteTask(id) {
-    if (!confirm('Delete this item and its sub-tasks?')) return
-    const childIds = tasks.filter(t => t.parent_id === id).map(t => t.id)
-    if (childIds.length) await supabase.from('schedule_tasks').delete().in('id', childIds)
-    await supabase.from('schedule_tasks').delete().eq('id', id)
-    setTasks(prev => prev.filter(t => t.id !== id && t.parent_id !== id))
-    if (editingId === id) setEditingId(null)
+    if (!window.confirm('Delete this item and its sub-tasks?')) return
+    const deletedIds = new Set([id, ...tasksRef.current.filter(task => task.parent_id === id).map(task => task.id)])
+    const remaining = tasksRef.current
+      .filter(task => !deletedIds.has(task.id))
+      .map(task => ({ ...task, depends_on: (task.depends_on || []).filter(depId => !deletedIds.has(depId)) }))
+    const dependencyChanges = remaining.filter(task => {
+      const original = tasksRef.current.find(row => row.id === task.id)
+      return JSON.stringify(task.depends_on) !== JSON.stringify(original.depends_on || [])
+    })
+    if (dependencyChanges.length) {
+      const { error } = await supabase.from('schedule_tasks').upsert(dependencyChanges)
+      if (error) return setNotice({ type: 'error', text: `Could not update dependencies: ${error.message}` })
+    }
+    const childIds = [...deletedIds].filter(childId => childId !== id)
+    if (childIds.length) {
+      const { error } = await supabase.from('schedule_tasks').delete().in('id', childIds)
+      if (error) return setNotice({ type: 'error', text: `Could not delete sub-tasks: ${error.message}` })
+    }
+    const { error } = await supabase.from('schedule_tasks').delete().eq('id', id)
+    if (error) return setNotice({ type: 'error', text: `Could not delete item: ${error.message}` })
+    const next = rollupPhaseDates(remaining)
+    tasksRef.current = next
+    setTasks(next)
+    setEditingId(null)
+    setNotice({ type: 'success', text: 'Schedule item deleted' })
   }
 
   function openEdit(task) {
     setEditingId(task.id)
-    setEditFields({ name: task.name, start_date: task.start_date||'', end_date: task.end_date||'', status: task.status||'not_started', depends_on: task.depends_on||[] })
+    setEditFields({
+      name: task.name,
+      start_date: task.start_date || '',
+      end_date: task.end_date || '',
+      status: task.status || 'not_started',
+      depends_on: task.depends_on || [],
+    })
   }
 
   async function saveEdit(id) {
-    await updateTask(id, { name: editFields.name, start_date: editFields.start_date||null, end_date: editFields.end_date||null, status: editFields.status, depends_on: editFields.depends_on })
-    setEditingId(null)
+    const item = tasksRef.current.find(task => task.id === id)
+    const isPhase = !item?.parent_id
+    const start = isPhase ? item.start_date : toDateString(normalizeWorkday(editFields.start_date))
+    const endCandidate = isPhase ? item.end_date : normalizeWorkday(editFields.end_date, -1)
+    const end = isPhase ? item.end_date : toDateString(endCandidate < parseDate(start) ? parseDate(start) : endCandidate)
+    const saved = await updateTask(id, {
+      name: editFields.name.trim() || item.name,
+      start_date: start,
+      end_date: end,
+      status: editFields.status,
+      depends_on: isPhase ? [] : editFields.depends_on,
+    }, 'Schedule item saved')
+    if (saved) setEditingId(null)
   }
 
-  function startBarDrag(e, taskId, type) {
-    e.preventDefault(); e.stopPropagation()
-    const task = tasks.find(t => t.id === taskId)
-    if (!task) return
-    setDrag({ taskId, type, startX: e.clientX, origStart: task.start_date, origEnd: task.end_date })
+  function startBarDrag(event, task, type) {
+    if (!task.parent_id) return
+    event.preventDefault()
+    event.stopPropagation()
+    setDrag({
+      taskId: task.id,
+      type,
+      startX: event.clientX,
+      originalStart: task.start_date,
+      originalEnd: task.end_date,
+    })
   }
 
-  function startReorder(e, task, flatIdx) {
-    e.preventDefault(); e.stopPropagation()
-    setReorder({ taskId: task.id, isPhase: !task.parent_id, parentId: task.parent_id, startFlatIdx: flatIdx, targetFlatIdx: flatIdx, startY: e.clientY })
+  function startReorder(event, task, flatIndex) {
+    event.preventDefault()
+    event.stopPropagation()
+    setReorder({
+      taskId: task.id,
+      isPhase: !task.parent_id,
+      parentId: task.parent_id,
+      startFlatIndex: flatIndex,
+      targetFlatIndex: flatIndex,
+      startY: event.clientY,
+    })
   }
 
-  // ── Flat render list ──────────────────────────────────────────────────────
-  const phases = tasks.filter(t => !t.parent_id).sort((a,b) => (a.sort_order||0)-(b.sort_order||0))
+  const phases = tasks.filter(task => !task.parent_id).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
   const flatList = []
-  phases.forEach((phase, pi) => {
-    const phaseColor = phase.color || PHASE_COLORS[pi % PHASE_COLORS.length]
+  phases.forEach((phase, phaseIndex) => {
+    const phaseColor = phase.color || PHASE_COLORS[phaseIndex % PHASE_COLORS.length]
     flatList.push({ task: phase, depth: 0, isPhase: true, phaseColor })
     if (!collapsed.has(phase.id)) {
-      tasks.filter(t => t.parent_id === phase.id)
-        .sort((a,b) => (a.sort_order||0)-(b.sort_order||0))
+      tasks.filter(task => task.parent_id === phase.id)
+        .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
         .forEach(child => flatList.push({ task: child, depth: 1, isPhase: false, phaseColor }))
     }
   })
   flatListRef.current = flatList
 
-  // ── Timeline range ────────────────────────────────────────────────────────
-  const allDates = tasks.flatMap(t => [t.start_date, t.end_date].filter(Boolean).map(parse))
-  const minDate  = allDates.length ? new Date(Math.min(...allDates)) : new Date()
-  const taskMax  = allDates.length ? new Date(Math.max(...allDates)) : new Date()
-  const nextFeb  = new Date(new Date().getFullYear() + 1, 1, 28)
-  const maxDate  = new Date(Math.max(taskMax, nextFeb))
-  const tlStart  = weekStart(addDays(minDate, -14))
-  const tlEnd    = weekStart(addDays(maxDate, 28))
-
+  const childTasks = tasks.filter(task => task.parent_id)
+  const datedTasks = childTasks.filter(task => task.start_date && task.end_date)
+  const projectStart = minDate(datedTasks.map(task => task.start_date)) || new Date()
+  const projectEnd = maxDate(datedTasks.map(task => task.end_date)) || new Date()
+  const timelineStart = startOfWeek(addCalendarDays(projectStart, -7))
+  const timelineEnd = startOfWeek(addCalendarDays(projectEnd, 21))
   const weeks = []
-  let w = new Date(tlStart)
-  while (w <= tlEnd) { weeks.push(new Date(w)); w = addDays(w, 7) }
+  for (let week = new Date(timelineStart); week <= timelineEnd; week = addCalendarDays(week, 7)) weeks.push(new Date(week))
+  const timelineWidth = weeks.length * weekWidth
+  const bodyHeight = Math.max(flatList.length * ROW_H, ROW_H * 3)
+  const barLeft = value => diffCalendarDays(timelineStart, value) * dayWidth
+  const barWidth = (start, end) => Math.max((diffCalendarDays(start, end) + 1) * dayWidth, 6)
+  const inspections = childTasks.filter(task => getJeffersonTaskMetadata(task.name).type === 'inspection').length
+  const completed = childTasks.filter(task => task.status === 'complete').length
+  const editingTask = tasks.find(task => task.id === editingId)
+  const dependencyName = id => tasks.find(task => task.id === id)?.name || ''
 
-  const timelineW = weeks.length * weekW
-  const bodyH     = flatList.length * ROW_H
+  function exportCsv() {
+    const header = ['Phase', 'Task', 'Trade', 'Type', 'Start', 'Finish', 'Workdays', 'Predecessors', 'Plan references', 'Notes']
+    const rows = phases.flatMap(phase => tasks
+      .filter(task => task.parent_id === phase.id)
+      .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
+      .map(item => {
+        const metadata = getJeffersonTaskMetadata(item.name)
+        return [
+          phase.name, item.name.replace(/^INSPECTION - /, ''), metadata.trade,
+          TYPE_MAP[metadata.type]?.label || 'Work', item.start_date, item.end_date,
+          workdayDuration(item.start_date, item.end_date),
+          (item.depends_on || []).map(dependencyName).join('; '), metadata.references, metadata.notes,
+        ]
+      }))
+    const csv = [header, ...rows].map(row => row.map(csvCell).join(',')).join('\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = '3120-jefferson-construction-schedule.csv'
+    link.click()
+    URL.revokeObjectURL(url)
+  }
 
-  const barLeft  = s => !s ? 0 : diffDays(tlStart, parse(s)) * dayW
-  const barWidth = (s,e) => (!s||!e) ? weekW : Math.max((diffDays(parse(s),parse(e))+1)*dayW, 6)
-
-  if (loading) return <div className="text-center py-24 text-lbl3 text-sm">Loading…</div>
-
-  const editingTask = tasks.find(t => t.id === editingId)
+  if (loading) return <div className="text-center py-24 text-lbl3 text-sm">Loading schedule...</div>
 
   return (
     <div>
-      {/* Toolbar */}
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
-        <button onClick={addPhase} className="btn-primary text-xs px-3 py-1.5">+ Add Phase</button>
-        <button
-          onClick={applyTemplate}
-          disabled={loadingTpl}
-          className="btn-secondary text-xs px-3 py-1.5"
-        >
-          {loadingTpl ? 'Loading…' : '🏠 Load House Template'}
-        </button>
-        <span className="text-lbl3 text-xs hidden md:inline">Drag ⠿ to reorder · Drop task onto a phase to nest it · Click row to edit · Drag bar to move</span>
-        <div className="ml-auto flex items-center gap-1">
-          <span className="text-lbl3 text-xs mr-1">Zoom</span>
-          <button onClick={() => setZoomIdx(i => Math.max(0, i-1))} disabled={zoomIdx===0} className="btn-secondary text-xs px-2 py-1">−</button>
-          <span className="text-lbl3 text-xs w-8 text-center">{weekW}px</span>
-          <button onClick={() => setZoomIdx(i => Math.min(ZOOM_LEVELS.length-1, i+1))} disabled={zoomIdx===ZOOM_LEVELS.length-1} className="btn-secondary text-xs px-2 py-1">+</button>
+      <div className="schedule-screen">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+          <SummaryCard label="Planned Start" value={formatShortDate(projectStart, { includeYear: true })} />
+          <SummaryCard label="Substantial Completion" value={formatShortDate(projectEnd, { includeYear: true })} />
+          <SummaryCard label="Working Days" value={workdayDuration(projectStart, projectEnd)} detail="Monday-Friday" />
+          <SummaryCard label="Inspection Gates" value={inspections} detail={`${completed}/${childTasks.length} tasks complete`} />
         </div>
-      </div>
 
-      {/* Gantt */}
-      <div className="apple-card" style={{ overflow: 'auto', maxHeight: '68vh' }}>
-        <div style={{ minWidth: LIST_W + timelineW }}>
+        {notice && (
+          <div className="mb-4 rounded-apple px-4 py-3 text-sm" style={{
+            color: notice.type === 'error' ? '#ff9f0a' : '#30d158',
+            background: notice.type === 'error' ? 'rgba(255,159,10,0.12)' : 'rgba(48,209,88,0.10)',
+            border: `1px solid ${notice.type === 'error' ? 'rgba(255,159,10,0.3)' : 'rgba(48,209,88,0.25)'}`,
+          }}>{notice.text}</div>
+        )}
 
-          {/* Header */}
-          <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 20, height: HDR_H, background: '#1c1c1e', borderBottom: '1px solid rgba(84,84,88,0.4)' }}>
-            <div style={{ width: LIST_W, minWidth: LIST_W, position: 'sticky', left: 0, zIndex: 30, background: '#1c1c1e', display: 'flex', alignItems: 'flex-end', padding: '0 16px 10px', borderRight: '1px solid rgba(84,84,88,0.3)' }}>
-              <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#636366' }}>Phases & Tasks</span>
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', height: 26 }}>
-                {getMonthGroups(weeks).map(({ label, start, count }) => (
-                  <div key={start} style={{ width: count * weekW, flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 8, borderRight: '1px solid rgba(84,84,88,0.25)', fontSize: 11, fontWeight: 600, color: '#ebebf5', overflow: 'hidden' }}>
-                    {label}
-                  </div>
-                ))}
+        <div className="flex items-center gap-2 mb-4 flex-wrap no-print">
+          <button onClick={addPhase} className="btn-primary text-xs px-3 py-2">+ Add Phase</button>
+          <button onClick={applyPermitSchedule} disabled={loadingTemplate} className="btn-secondary text-xs px-3 py-2">
+            {loadingTemplate ? 'Loading...' : tasks.length ? 'Restore Permit Schedule' : 'Load Permit Schedule'}
+          </button>
+          <button onClick={exportCsv} className="btn-secondary text-xs px-3 py-2">Export CSV</button>
+          <button onClick={() => window.print()} className="btn-secondary text-xs px-3 py-2">Print / Save PDF</button>
+          <span className="text-lbl3 text-xs hidden xl:inline">Dates use a Monday-Friday work calendar. Moving a task pushes conflicting successors.</span>
+          <div className="ml-auto flex items-center gap-1">
+            <span className="text-lbl3 text-xs mr-1">Zoom</span>
+            <button onClick={() => setZoomIndex(index => Math.max(0, index - 1))} disabled={zoomIndex === 0} className="btn-secondary text-xs px-2 py-1">-</button>
+            <span className="text-lbl3 text-xs w-8 text-center">{weekWidth}px</span>
+            <button onClick={() => setZoomIndex(index => Math.min(ZOOM_LEVELS.length - 1, index + 1))} disabled={zoomIndex === ZOOM_LEVELS.length - 1} className="btn-secondary text-xs px-2 py-1">+</button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 mb-3 text-xs text-lbl3">
+          <Legend color="#ff9f0a" label="Inspection gate" diamond />
+          <Legend color="#bf5af2" label="Procurement" />
+          <Legend color="#30d158" label="Complete" />
+          <Legend color="#ff453a" label="Blocked" />
+        </div>
+
+        <div className="apple-card schedule-gantt" style={{ overflow: 'auto', maxHeight: '70vh' }}>
+          <div style={{ minWidth: LIST_W + timelineWidth }}>
+            <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 20, height: HDR_H, background: '#1c1c1e', borderBottom: '1px solid rgba(84,84,88,0.4)' }}>
+              <div style={{ width: LIST_W, minWidth: LIST_W, position: 'sticky', left: 0, zIndex: 30, background: '#1c1c1e', display: 'flex', alignItems: 'flex-end', padding: '0 16px 10px', borderRight: '1px solid rgba(84,84,88,0.3)' }}>
+                <span style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.07em', color: '#8e8e93' }}>Phases, tasks & responsible trade</span>
               </div>
-              <div style={{ display: 'flex', height: 26 }}>
-                {weeks.map((wk, i) => {
-                  const isToday = diffDays(wk, weekStart(new Date())) === 0
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', height: 29 }}>
+                  {getMonthGroups(weeks).map(({ label, start, count }) => (
+                    <div key={start} style={{ width: count * weekWidth, flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 8, borderRight: '1px solid rgba(84,84,88,0.25)', fontSize: 11, fontWeight: 600, color: '#ebebf5', overflow: 'hidden' }}>{label}</div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', height: 29 }}>
+                  {weeks.map((week, index) => {
+                    const isCurrentWeek = diffCalendarDays(week, startOfWeek(new Date())) === 0
+                    return (
+                      <div key={index} style={{ width: weekWidth, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRight: '1px solid rgba(84,84,88,0.2)', fontSize: 10, color: isCurrentWeek ? '#0a84ff' : '#8e8e93', fontWeight: isCurrentWeek ? 700 : 400, overflow: 'hidden' }}>
+                        {weekWidth >= 40 || index % 2 === 0 ? formatShortDate(week) : ''}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex' }}>
+              <div style={{ width: LIST_W, minWidth: LIST_W, position: 'sticky', left: 0, zIndex: 10, background: '#1c1c1e', borderRight: '1px solid rgba(84,84,88,0.3)' }}>
+                {flatList.map(({ task, depth, isPhase, phaseColor }, flatIndex) => {
+                  const metadata = getJeffersonTaskMetadata(task.name)
+                  const isDragging = reorder?.taskId === task.id
+                  const isNestTarget = reorder && !reorder.isPhase && isPhase && reorder.targetFlatIndex === flatIndex && reorder.taskId !== task.id
+                  const isReorderTarget = reorder && reorder.targetFlatIndex === flatIndex && reorder.taskId !== task.id && !isNestTarget
                   return (
-                    <div key={i} style={{ width: weekW, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRight: '1px solid rgba(84,84,88,0.2)', fontSize: 10, color: isToday ? '#0a84ff' : '#636366', fontWeight: isToday ? 700 : 400, overflow: 'hidden' }}>
-                      {weekW >= 40 ? wk.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) : (i % 2 === 0 ? wk.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) : '')}
+                    <div key={task.id} onMouseEnter={() => setHoveredId(task.id)} onMouseLeave={() => setHoveredId(null)} style={{
+                      height: ROW_H, display: 'flex', alignItems: 'center', padding: `0 6px 0 ${8 + depth * 20}px`,
+                      borderBottom: isNestTarget ? '2px solid #0a84ff' : '1px solid rgba(84,84,88,0.2)',
+                      borderTop: isReorderTarget ? '2px solid #0a84ff' : undefined,
+                      background: isNestTarget ? 'rgba(10,132,255,0.12)' : editingId === task.id ? 'rgba(10,132,255,0.1)' : isDragging ? 'rgba(10,132,255,0.06)' : isPhase ? hexToRgba(phaseColor, 0.08) : 'transparent',
+                      cursor: 'pointer', gap: 4, opacity: isDragging ? 0.5 : 1,
+                    }}>
+                      <span onMouseDown={event => startReorder(event, task, flatIndex)} style={{ color: '#636366', fontSize: 12, cursor: 'grab', flexShrink: 0, paddingRight: 2, userSelect: 'none' }} title="Drag to reorder">::</span>
+                      {isPhase ? (
+                        <button onClick={event => { event.stopPropagation(); setCollapsed(value => { const next = new Set(value); next.has(task.id) ? next.delete(task.id) : next.add(task.id); return next }) }} style={{ color: '#8e8e93', fontSize: 9, width: 12, flexShrink: 0 }}>
+                          {collapsed.has(task.id) ? '▶' : '▼'}
+                        </button>
+                      ) : <span style={{ width: 12, flexShrink: 0 }} />}
+                      <span style={{ width: 7, height: 7, borderRadius: metadata.type === 'inspection' ? 1 : '50%', transform: metadata.type === 'inspection' ? 'rotate(45deg)' : undefined, background: metadata.type === 'inspection' ? '#ff9f0a' : phaseColor, flexShrink: 0 }} />
+                      <div onClick={() => editingId === task.id ? setEditingId(null) : openEdit(task)} style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: isPhase ? 700 : 500, color: isPhase ? '#fff' : '#ebebf5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.name.replace(/^INSPECTION - /, '')}</div>
+                        {!isPhase && <div style={{ fontSize: 10, color: metadata.type === 'inspection' ? '#ff9f0a' : '#8e8e93', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{metadata.trade || 'Unassigned'} · {workdayDuration(task.start_date, task.end_date)} workday{workdayDuration(task.start_date, task.end_date) === 1 ? '' : 's'}</div>}
+                      </div>
+                      <span style={{ color: STATUS_MAP[task.status]?.color || '#8E8E93', fontSize: 9, flexShrink: 0 }}>●</span>
+                      {isPhase && <button onClick={event => { event.stopPropagation(); addTask(task.id) }} style={{ fontSize: 14, fontWeight: 700, color: '#0a84ff', flexShrink: 0, opacity: hoveredId === task.id ? 1 : 0, width: 18 }} title="Add task">+</button>}
+                      <button onClick={event => { event.stopPropagation(); deleteTask(task.id) }} style={{ color: '#ff453a', fontSize: 14, width: 18, flexShrink: 0, opacity: hoveredId === task.id ? 1 : 0 }} title="Delete">×</button>
                     </div>
                   )
                 })}
               </div>
-            </div>
-          </div>
 
-          {/* Body */}
-          <div style={{ display: 'flex' }}>
+              <div style={{ flex: 1, position: 'relative', height: bodyHeight }}>
+                {weeks.map((_, index) => (
+                  <React.Fragment key={index}>
+                    <div style={{ position: 'absolute', top: 0, bottom: 0, left: index * weekWidth, width: 1, background: 'rgba(84,84,88,0.2)', pointerEvents: 'none' }} />
+                    <div style={{ position: 'absolute', top: 0, bottom: 0, left: index * weekWidth + dayWidth * 5, width: dayWidth * 2, background: 'rgba(142,142,147,0.07)', pointerEvents: 'none' }} />
+                  </React.Fragment>
+                ))}
+                {new Date() >= timelineStart && new Date() <= timelineEnd && <div style={{ position: 'absolute', top: 0, bottom: 0, left: diffCalendarDays(timelineStart, new Date()) * dayWidth, width: 1, background: 'rgba(255,69,58,0.7)', zIndex: 4, pointerEvents: 'none' }} />}
+                {flatList.map((_, index) => <div key={index} style={{ position: 'absolute', left: 0, right: 0, top: (index + 1) * ROW_H - 1, height: 1, background: 'rgba(84,84,88,0.2)', pointerEvents: 'none' }} />)}
 
-            {/* Task list */}
-            <div style={{ width: LIST_W, minWidth: LIST_W, position: 'sticky', left: 0, zIndex: 10, background: '#1c1c1e', borderRight: '1px solid rgba(84,84,88,0.3)' }}>
-              {flatList.map(({ task, depth, isPhase, phaseColor }, fi) => {
-                const isDraggingThis  = reorder?.taskId === task.id
-                // Nest indicator: a task being dragged onto a phase row
-                const isNestTarget    = reorder && !reorder.isPhase && isPhase && reorder.targetFlatIdx === fi && reorder.taskId !== task.id
-                // Reorder indicator: normal position insert (not a nest)
-                const isReorderTarget = reorder && reorder.targetFlatIdx === fi && reorder.taskId !== task.id && !isNestTarget
-                return (
-                  <div
-                    key={task.id}
-                    onMouseEnter={() => setHoveredId(task.id)}
-                    onMouseLeave={() => setHoveredId(null)}
-                    style={{
-                      height: ROW_H,
-                      display: 'flex', alignItems: 'center',
-                      padding: `0 6px 0 ${8 + depth * 20}px`,
-                      borderBottom: isNestTarget ? '2px solid #0a84ff' : '1px solid rgba(84,84,88,0.2)',
-                      borderTop: isReorderTarget ? '2px solid #0a84ff' : undefined,
-                      background: isNestTarget
-                        ? 'rgba(10,132,255,0.12)'
-                        : editingId === task.id
-                          ? 'rgba(10,132,255,0.1)'
-                          : isDraggingThis ? 'rgba(10,132,255,0.06)' : isPhase ? hexToRgba(phaseColor, 0.08) : 'transparent',
-                      cursor: 'pointer', gap: 3,
-                      opacity: isDraggingThis ? 0.5 : 1,
-                    }}
-                  >
-                    {/* Drag grip */}
-                    <span
-                      onMouseDown={e => startReorder(e, task, fi)}
-                      style={{ color: '#48484a', fontSize: 12, cursor: 'grab', flexShrink: 0, paddingRight: 2, userSelect: 'none' }}
-                      title="Drag to reorder"
-                    >⠿</span>
-
-                    {/* Collapse toggle for phases */}
-                    {isPhase ? (
-                      <button
-                        onClick={e => { e.stopPropagation(); setCollapsed(s => { const n=new Set(s); n.has(task.id)?n.delete(task.id):n.add(task.id); return n }) }}
-                        style={{ color: '#636366', fontSize: 9, width: 12, flexShrink: 0 }}
-                      >
-                        {collapsed.has(task.id) ? '▶' : '▼'}
-                      </button>
-                    ) : (
-                      <span style={{ width: 12, flexShrink: 0 }} />
-                    )}
-
-                    <span style={{ width: 7, height: 7, borderRadius: '50%', background: phaseColor, flexShrink: 0 }} />
-
-                    {/* Name — click to edit */}
-                    <span
-                      onClick={() => editingId === task.id ? setEditingId(null) : openEdit(task)}
-                      style={{ flex: 1, fontSize: 13, fontWeight: isPhase ? 600 : 400, color: isPhase ? '#fff' : '#ebebf5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
-                    >
-                      {task.name}
-                    </span>
-
-                    <span style={{ color: STATUS_MAP[task.status]?.color || '#8E8E93', fontSize: 9, flexShrink: 0 }}>●</span>
-
-                    {/* + task button on phase rows — visible on hover */}
-                    {isPhase && (
-                      <button
-                        onClick={e => { e.stopPropagation(); addTask(task.id) }}
-                        style={{ fontSize: 10, fontWeight: 700, color: '#0a84ff', flexShrink: 0, opacity: hoveredId === task.id ? 1 : 0, transition: 'opacity 0.15s', lineHeight: 1, marginRight: 2 }}
-                        title="Add task to this phase"
-                      >+</button>
-                    )}
-
-                    {/* Delete button — visible on hover */}
-                    <button
-                      onClick={e => { e.stopPropagation(); deleteTask(task.id) }}
-                      style={{ color: '#ff453a', fontSize: 11, width: 16, flexShrink: 0, opacity: hoveredId === task.id ? 1 : 0, transition: 'opacity 0.15s', lineHeight: 1 }}
-                      title="Delete"
-                    >×</button>
-                  </div>
-                )
-              })}
-              {flatList.length === 0 && (
-                <div style={{ padding: '32px 16px', textAlign: 'center', fontSize: 13, color: '#636366', fontStyle: 'italic' }}>
-                  Add a phase or load the house template to get started
-                </div>
-              )}
-            </div>
-
-            {/* Timeline */}
-            <div style={{ flex: 1, position: 'relative', height: bodyH || ROW_H * 3 }}>
-              {/* Today line */}
-              <div style={{ position: 'absolute', top: 0, bottom: 0, left: diffDays(tlStart, new Date()) * dayW, width: 1, background: 'rgba(255,69,58,0.5)', zIndex: 4, pointerEvents: 'none' }} />
-
-              {/* Week grid lines */}
-              {weeks.map((_, i) => (
-                <div key={i} style={{ position: 'absolute', top: 0, bottom: 0, left: i * weekW, width: 1, background: 'rgba(84,84,88,0.18)', pointerEvents: 'none' }} />
-              ))}
-
-              {/* Row dividers */}
-              {flatList.map((_, i) => (
-                <div key={i} style={{ position: 'absolute', left: 0, right: 0, top: (i+1)*ROW_H-1, height: 1, background: 'rgba(84,84,88,0.2)', pointerEvents: 'none' }} />
-              ))}
-
-              {/* Task bars */}
-              {flatList.map(({ task, isPhase, phaseColor }, i) => {
-                if (!task.start_date || !task.end_date) return null
-                const left  = barLeft(task.start_date)
-                const width = barWidth(task.start_date, task.end_date)
-                const barH  = isPhase ? 30 : 20
-                const baseColor = (task.status && task.status !== 'not_started' && STATUS_MAP[task.status]?.color) || phaseColor
-                const top   = i * ROW_H + (ROW_H - barH) / 2
-                const minLabelW = isPhase ? 60 : 50
-
-                return (
-                  <div key={task.id}>
-                    <div
-                      onMouseDown={e => startBarDrag(e, task.id, 'move')}
-                      style={{
-                        position: 'absolute', top, left, width, height: barH,
-                        background: isPhase ? baseColor : hexToRgba(baseColor, 0.3),
-                        border: isPhase ? 'none' : `1.5px solid ${baseColor}`,
-                        borderRadius: isPhase ? 4 : 5,
-                        opacity: isPhase ? 0.95 : 1,
-                        cursor: drag?.taskId === task.id ? 'grabbing' : 'grab', display: 'flex', alignItems: 'center', overflow: 'hidden', zIndex: 2
-                      }}
-                      title={`${task.name}: ${fmtDate(task.start_date)} – ${fmtDate(task.end_date)}`}
-                    >
-                      {width > minLabelW && (
-                        <span style={{ fontSize: isPhase ? 12 : 11, fontWeight: isPhase ? 700 : 600, color: isPhase ? '#fff' : baseColor, paddingLeft: 7, overflow: 'hidden', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none' }}>
-                          {task.name}
-                        </span>
-                      )}
-                      <div
-                        onMouseDown={e => startBarDrag(e, task.id, 'resize')}
-                        style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 6, cursor: 'ew-resize', background: isPhase ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.15)', borderRadius: '0 5px 5px 0' }}
-                      />
+                {flatList.map(({ task, isPhase, phaseColor }, index) => {
+                  if (!task.start_date || !task.end_date) return null
+                  const metadata = getJeffersonTaskMetadata(task.name)
+                  const isInspection = metadata.type === 'inspection' || metadata.type === 'milestone'
+                  const left = barLeft(task.start_date)
+                  const width = barWidth(task.start_date, task.end_date)
+                  const barHeight = isPhase ? 30 : 20
+                  const baseColor = task.status && task.status !== 'not_started' ? STATUS_MAP[task.status]?.color || phaseColor : metadata.type === 'procurement' ? '#bf5af2' : metadata.type === 'inspection' ? '#ff9f0a' : phaseColor
+                  const top = index * ROW_H + (ROW_H - barHeight) / 2
+                  if (isInspection && !isPhase) {
+                    return <div key={task.id} onMouseDown={event => startBarDrag(event, task, 'move')} title={`${task.name}: ${formatShortDate(task.start_date)}`} style={{ position: 'absolute', top: top + 3, left: left - 1, width: 14, height: 14, background: baseColor, border: '2px solid #1c1c1e', transform: 'rotate(45deg)', borderRadius: 2, cursor: 'grab', zIndex: 5 }} />
+                  }
+                  return (
+                    <div key={task.id}>
+                      <div onMouseDown={event => startBarDrag(event, task, 'move')} title={`${task.name}: ${formatShortDate(task.start_date)} - ${formatShortDate(task.end_date)} (${workdayDuration(task.start_date, task.end_date)} workdays)`} style={{
+                        position: 'absolute', top, left, width, height: barHeight,
+                        background: isPhase ? baseColor : hexToRgba(baseColor, metadata.type === 'procurement' ? 0.42 : 0.3),
+                        border: isPhase ? 'none' : `1.5px solid ${baseColor}`, borderRadius: isPhase ? 4 : 5,
+                        opacity: isPhase ? 0.95 : 1, cursor: isPhase ? 'default' : drag?.taskId === task.id ? 'grabbing' : 'grab',
+                        display: 'flex', alignItems: 'center', overflow: 'hidden', zIndex: 2,
+                      }}>
+                        {width > (isPhase ? 72 : 64) && <span style={{ fontSize: isPhase ? 12 : 10, fontWeight: isPhase ? 700 : 600, color: isPhase ? '#fff' : baseColor, paddingLeft: 7, overflow: 'hidden', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none' }}>{task.name.replace(/^INSPECTION - /, '')}</span>}
+                        {!isPhase && <div onMouseDown={event => startBarDrag(event, task, 'resize')} style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 7, cursor: 'ew-resize', background: 'rgba(0,0,0,0.18)', borderRadius: '0 5px 5px 0' }} />}
+                      </div>
                     </div>
-                    <div style={{ position: 'absolute', top: top + barH + 2, left, fontSize: 9, color: '#636366', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none' }}>
-                      {fmtDate(task.start_date)} – {fmtDate(task.end_date)}
-                    </div>
-                  </div>
-                )
-              })}
-
-              <DependencyArrows tasks={tasks} flatList={flatList} tlStart={tlStart} bodyH={bodyH || ROW_H * 3} timelineW={timelineW} dayW={dayW} />
+                  )
+                })}
+                <DependencyArrows tasks={tasks} flatList={flatList} timelineStart={timelineStart} bodyHeight={bodyHeight} timelineWidth={timelineWidth} dayWidth={dayWidth} />
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Edit modal */}
+      <PrintableSchedule phases={phases} tasks={tasks} projectStart={projectStart} projectEnd={projectEnd} />
+
       {editingTask && (
-        <EditModal
-          task={editingTask}
-          fields={editFields}
-          setFields={setEditFields}
-          allTasks={tasks.filter(t => t.id !== editingId)}
-          isPhase={!editingTask.parent_id}
-          onSave={() => saveEdit(editingId)}
-          onCancel={() => setEditingId(null)}
-          onDelete={() => deleteTask(editingId)}
-          onAddTask={() => addTask(editingId)}
-          onCreateTask={async name => {
-            const today = toStr(new Date())
-            const end   = toStr(addDays(new Date(), 6))
-            const phases = tasksRef.current.filter(t => !t.parent_id)
-            const maxOrder = phases.reduce((m, t) => Math.max(m, t.sort_order||0), 0)
-            const color = PHASE_COLORS[phases.length % PHASE_COLORS.length]
-            const { data } = await supabase.from('schedule_tasks')
-              .insert({ name, start_date: today, end_date: end, status: 'not_started', sort_order: maxOrder + 1, color, depends_on: [] })
-              .select().single()
-            if (data) {
-              setTasks(prev => [...prev, data])
-              setEditFields(p => ({ ...p, depends_on: [...(p.depends_on||[]), data.id] }))
-            }
-          }}
-        />
+        <EditModal task={editingTask} fields={editFields} setFields={setEditFields} allTasks={tasks.filter(task => task.parent_id && task.id !== editingId)} isPhase={!editingTask.parent_id} onSave={() => saveEdit(editingId)} onCancel={() => setEditingId(null)} onDelete={() => deleteTask(editingId)} onAddTask={() => addTask(editingId)} />
       )}
     </div>
   )
 }
 
-// ── Dependency arrows ─────────────────────────────────────────────────────────
-function DependencyArrows({ tasks, flatList, tlStart, bodyH, timelineW, dayW }) {
+function SummaryCard({ label, value, detail }) {
+  return <div className="apple-card px-4 py-3"><div className="text-lbl3 uppercase tracking-wider" style={{ fontSize: 10, fontWeight: 700 }}>{label}</div><div className="text-white font-semibold mt-1" style={{ fontSize: 17 }}>{value}</div>{detail && <div className="text-lbl3 mt-0.5" style={{ fontSize: 10 }}>{detail}</div>}</div>
+}
+
+function Legend({ color, label, diamond }) {
+  return <span className="flex items-center gap-1.5"><span style={{ width: 8, height: 8, background: color, borderRadius: diamond ? 1 : 4, transform: diamond ? 'rotate(45deg)' : undefined }} />{label}</span>
+}
+
+function DependencyArrows({ tasks, flatList, timelineStart, bodyHeight, timelineWidth, dayWidth }) {
   const arrows = []
-  flatList.forEach(({ task }, toIdx) => {
-    ;(task.depends_on || []).forEach(depId => {
-      const fromIdx = flatList.findIndex(r => r.task.id === depId)
-      if (fromIdx === -1) return
-      const fromTask = flatList[fromIdx].task
+  flatList.forEach(({ task }, toIndex) => {
+    ;(task.depends_on || []).forEach(dependencyId => {
+      const fromIndex = flatList.findIndex(row => row.task.id === dependencyId)
+      if (fromIndex === -1) return
+      const fromTask = flatList[fromIndex].task
       if (!fromTask.end_date || !task.start_date) return
-      const x1 = diffDays(tlStart, parse(fromTask.end_date)) * dayW + dayW
-      const y1 = fromIdx * ROW_H + ROW_H / 2
-      const x2 = diffDays(tlStart, parse(task.start_date)) * dayW
-      const y2 = toIdx  * ROW_H + ROW_H / 2
-      arrows.push({ x1, y1, x2, y2, key: `${depId}-${task.id}` })
+      arrows.push({
+        x1: diffCalendarDays(timelineStart, fromTask.end_date) * dayWidth + dayWidth,
+        y1: fromIndex * ROW_H + ROW_H / 2,
+        x2: diffCalendarDays(timelineStart, task.start_date) * dayWidth,
+        y2: toIndex * ROW_H + ROW_H / 2,
+        key: `${dependencyId}-${task.id}`,
+      })
     })
   })
   if (!arrows.length) return null
   return (
-    <svg style={{ position: 'absolute', top: 0, left: 0, width: timelineW, height: bodyH, pointerEvents: 'none', zIndex: 3 }}>
-      <defs>
-        <marker id="dep-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-          <path d="M0,0 L0,6 L6,3 z" fill="rgba(255,159,10,0.85)" />
-        </marker>
-      </defs>
+    <svg style={{ position: 'absolute', top: 0, left: 0, width: timelineWidth, height: bodyHeight, pointerEvents: 'none', zIndex: 3 }}>
+      <defs><marker id="dependency-arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="rgba(255,159,10,0.9)" /></marker></defs>
       {arrows.map(({ x1, y1, x2, y2, key }) => {
-        const elbowX = Math.max(x1 + 16, x2 - 12)
-        const d = x2 > x1 + 10
+        const elbowX = Math.max(x1 + 12, x2 - 10)
+        const path = x2 > x1 + 8
           ? `M${x1},${y1} L${elbowX},${y1} L${elbowX},${y2} L${x2},${y2}`
-          : `M${x1},${y1} L${x1+14},${y1} L${x1+14},${(y1+y2)/2} L${x2-14},${(y1+y2)/2} L${x2-14},${y2} L${x2},${y2}`
-        return <path key={key} d={d} fill="none" stroke="rgba(255,159,10,0.7)" strokeWidth="1.5" markerEnd="url(#dep-arrow)" />
+          : `M${x1},${y1} L${x1 + 12},${y1} L${x1 + 12},${(y1 + y2) / 2} L${x2 - 12},${(y1 + y2) / 2} L${x2 - 12},${y2} L${x2},${y2}`
+        return <path key={key} d={path} fill="none" stroke="rgba(255,159,10,0.65)" strokeWidth="1.25" markerEnd="url(#dependency-arrow)" />
       })}
     </svg>
   )
 }
 
-// ── Edit modal ────────────────────────────────────────────────────────────────
-function EditModal({ task, fields, setFields, allTasks, isPhase, onSave, onCancel, onDelete, onAddTask, onCreateTask }) {
-  const [depFilter, setDepFilter] = useState('')
-  const set = key => e => setFields(p => ({ ...p, [key]: e.target.value }))
-  const toggleDep = (id, checked) => setFields(p => ({
-    ...p,
-    depends_on: checked ? [...(p.depends_on||[]), id] : (p.depends_on||[]).filter(x => x !== id)
+function EditModal({ task, fields, setFields, allTasks, isPhase, onSave, onCancel, onDelete, onAddTask }) {
+  const [dependencyFilter, setDependencyFilter] = useState('')
+  const set = key => event => setFields(previous => ({ ...previous, [key]: event.target.value }))
+  const toggleDependency = (id, checked) => setFields(previous => ({
+    ...previous,
+    depends_on: checked ? [...new Set([...(previous.depends_on || []), id])] : (previous.depends_on || []).filter(value => value !== id),
   }))
-
-  const sorted = [...allTasks].sort((a, b) => a.name.localeCompare(b.name))
-  const filterLower = depFilter.trim().toLowerCase()
-  const filtered = filterLower ? sorted.filter(t => t.name.toLowerCase().includes(filterLower)) : sorted
-  const exactMatch = sorted.some(t => t.name.toLowerCase() === filterLower)
-  const canCreate = filterLower.length > 0 && !exactMatch
+  const filter = dependencyFilter.trim().toLowerCase()
+  const filtered = [...allTasks].sort((a, b) => a.name.localeCompare(b.name)).filter(item => !filter || item.name.toLowerCase().includes(filter))
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', pointerEvents: 'none' }}>
-      <div style={{ width: '100%', maxWidth: 900, background: '#1c1c1e', border: '1px solid rgba(84,84,88,0.5)', borderBottom: 'none', borderRadius: '16px 16px 0 0', padding: 20, boxShadow: '0 -8px 40px rgba(0,0,0,0.6)', pointerEvents: 'all' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
-          <span style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#636366' }}>{isPhase ? 'Edit Phase' : 'Edit Task'}</span>
-          <div style={{ flex: 1 }} />
-          {isPhase && <button onClick={onAddTask} style={{ fontSize: 12, fontWeight: 600, color: '#0a84ff' }}>+ Add Task</button>}
-          <button onClick={onDelete} style={{ fontSize: 12, color: '#ff453a' }}>🗑 Delete</button>
-          <button onClick={onCancel} className="btn-secondary text-xs px-2 py-1.5">✕ Close</button>
+      <div style={{ width: '100%', maxWidth: 940, background: '#1c1c1e', border: '1px solid rgba(84,84,88,0.5)', borderBottom: 'none', borderRadius: '16px 16px 0 0', padding: 20, boxShadow: '0 -8px 40px rgba(0,0,0,0.6)', pointerEvents: 'all' }}>
+        <div className="flex items-center gap-2 mb-4">
+          <span className="text-lbl3 uppercase tracking-wider font-semibold" style={{ fontSize: 11 }}>{isPhase ? 'Edit phase' : 'Edit task'}</span>
+          <div className="flex-1" />
+          {isPhase && <button onClick={onAddTask} className="text-xs text-acc font-semibold">+ Add Task</button>}
+          <button onClick={onDelete} className="text-xs text-neg">Delete</button>
+          <button onClick={onCancel} className="btn-secondary text-xs px-3 py-1.5">Close</button>
           <button onClick={onSave} className="btn-primary text-xs px-3 py-1.5">Save</button>
         </div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
-          <input value={fields.name} onChange={set('name')} className="apple-input text-sm" style={{ flex: '1 1 200px', minWidth: 160 }} placeholder="Name" />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <label style={{ fontSize: 11, color: '#636366' }}>Start</label>
-            <input type="date" value={fields.start_date} onChange={set('start_date')} className="apple-input text-xs" style={{ width: 130 }} />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <label style={{ fontSize: 11, color: '#636366' }}>End</label>
-            <input type="date" value={fields.end_date} onChange={set('end_date')} className="apple-input text-xs" style={{ width: 130 }} />
-          </div>
-          <select value={fields.status} onChange={set('status')} className="apple-input text-xs" style={{ width: 130 }}>
-            {Object.entries(STATUS_MAP).map(([k,v]) => <option key={k} value={k}>{v.label}</option>)}
-          </select>
+        <div className="flex gap-3 flex-wrap items-center mb-4">
+          <input value={fields.name} onChange={set('name')} className="apple-input text-sm" style={{ flex: '1 1 260px' }} placeholder="Name" />
+          <label className="flex items-center gap-2 text-lbl3 text-xs">Start<input type="date" value={fields.start_date} onChange={set('start_date')} disabled={isPhase} className="apple-input text-xs" style={{ width: 140, opacity: isPhase ? 0.55 : 1 }} /></label>
+          <label className="flex items-center gap-2 text-lbl3 text-xs">Finish<input type="date" value={fields.end_date} onChange={set('end_date')} disabled={isPhase} className="apple-input text-xs" style={{ width: 140, opacity: isPhase ? 0.55 : 1 }} /></label>
+          <select value={fields.status} onChange={set('status')} className="apple-input text-xs" style={{ width: 135 }}>{Object.entries(STATUS_MAP).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</select>
         </div>
-        <div>
-          <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#636366', marginBottom: 8 }}>Depends on</div>
-          {allTasks.length === 0 ? (
-            <span style={{ fontSize: 12, color: '#636366', fontStyle: 'italic' }}>No other tasks yet</span>
-          ) : (
-            <>
-              <input
-                value={depFilter}
-                onChange={e => setDepFilter(e.target.value)}
-                className="apple-input text-xs"
-                style={{ width: '100%', marginBottom: 8 }}
-                placeholder="Filter dependencies…"
-              />
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, maxHeight: 160, overflowY: 'auto' }}>
-                {filtered.map(t => {
-                  const checked = (fields.depends_on||[]).includes(t.id)
-                  return (
-                    <label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12, color: checked ? '#0a84ff' : '#ebebf5', background: checked ? 'rgba(10,132,255,0.15)' : 'rgba(84,84,88,0.2)', borderRadius: 6, padding: '4px 8px' }}>
-                      <input type="checkbox" checked={checked} onChange={e => toggleDep(t.id, e.target.checked)} style={{ accentColor: '#0a84ff' }} />
-                      {t.name}
-                    </label>
-                  )
-                })}
-                {filtered.length === 0 && !canCreate && (
-                  <span style={{ fontSize: 12, color: '#636366', fontStyle: 'italic' }}>No matches</span>
-                )}
-                {canCreate && (
-                  <button
-                    onClick={() => { onCreateTask(depFilter.trim()); setDepFilter('') }}
-                    style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12, color: '#30d158', background: 'rgba(48,209,88,0.12)', border: '1px dashed rgba(48,209,88,0.4)', borderRadius: 6, padding: '4px 8px' }}
-                  >
-                    + Create &ldquo;{depFilter.trim()}&rdquo;
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </div>
+        {isPhase ? <p className="text-lbl3 text-xs">Phase dates roll up automatically from child tasks.</p> : (
+          <div>
+            <div className="text-lbl3 uppercase tracking-wider font-semibold mb-2" style={{ fontSize: 10 }}>Finish-to-start predecessors</div>
+            <input value={dependencyFilter} onChange={event => setDependencyFilter(event.target.value)} className="apple-input text-xs w-full mb-2" placeholder="Filter tasks..." />
+            <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto">
+              {filtered.map(item => {
+                const checked = (fields.depends_on || []).includes(item.id)
+                return <label key={item.id} className="flex items-center gap-1.5 cursor-pointer text-xs rounded-md px-2 py-1" style={{ color: checked ? '#0a84ff' : '#ebebf5', background: checked ? 'rgba(10,132,255,0.15)' : 'rgba(84,84,88,0.2)' }}><input type="checkbox" checked={checked} onChange={event => toggleDependency(item.id, event.target.checked)} style={{ accentColor: '#0a84ff' }} />{item.name.replace(/^INSPECTION - /, '')}</label>
+              })}
+              {!filtered.length && <span className="text-lbl3 text-xs italic">No matching tasks</span>}
+            </div>
+          </div>
+        )}
       </div>
+    </div>
+  )
+}
+
+function PrintableSchedule({ phases, tasks, projectStart, projectEnd }) {
+  const nameFor = id => tasks.find(task => task.id === id)?.name.replace(/^INSPECTION - /, '') || ''
+  return (
+    <div className="schedule-print">
+      <div className="print-header">
+        <div><h1>3120 Jefferson Street</h1><p>Construction Schedule - Subcontractor Issue</p></div>
+        <div className="print-dates"><strong>{formatShortDate(projectStart, { includeYear: true })} - {formatShortDate(projectEnd, { includeYear: true })}</strong><span>Monday-Friday work calendar</span></div>
+      </div>
+      <p className="print-note">Dates are planning targets and depend on predecessor completion, inspection availability, weather, field conditions, and approved submittals. Inspection rows are hold points; successor work may not proceed until the gate passes.</p>
+      {phases.map(phase => (
+        <section key={phase.id}>
+          <h2 style={{ borderLeftColor: phase.color || '#0a84ff' }}>{phase.name}</h2>
+          <table><thead><tr><th>Activity</th><th>Trade</th><th>Start</th><th>Finish</th><th>Days</th><th>Predecessor(s)</th><th>Plan Ref.</th></tr></thead>
+            <tbody>{tasks.filter(task => task.parent_id === phase.id).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map(item => {
+              const metadata = getJeffersonTaskMetadata(item.name)
+              return <tr key={item.id} className={metadata.type === 'inspection' ? 'inspection-row' : ''}><td>{item.name.replace(/^INSPECTION - /, '')}{metadata.type === 'inspection' && <strong className="inspection-label"> HOLD POINT</strong>}</td><td>{metadata.trade || 'Unassigned'}</td><td>{formatShortDate(item.start_date, { includeYear: true })}</td><td>{formatShortDate(item.end_date, { includeYear: true })}</td><td>{workdayDuration(item.start_date, item.end_date)}</td><td>{(item.depends_on || []).map(nameFor).join('; ') || '-'}</td><td>{metadata.references || '-'}</td></tr>
+            })}</tbody>
+          </table>
+        </section>
+      ))}
+      <div className="print-footer">3120 Jefferson Street · Plan-validated baseline · Generated {new Date().toLocaleDateString('en-US')}</div>
     </div>
   )
 }

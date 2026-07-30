@@ -103,7 +103,7 @@ BEGIN
   IF to_regclass('public.schedule_tasks') IS NOT NULL THEN
     ALTER TABLE schedule_tasks ADD COLUMN IF NOT EXISTS task_type TEXT NOT NULL DEFAULT 'work';
     ALTER TABLE schedule_tasks ADD COLUMN IF NOT EXISTS trade TEXT;
-    ALTER TABLE schedule_tasks ADD COLUMN IF NOT EXISTS references TEXT;
+    ALTER TABLE schedule_tasks ADD COLUMN IF NOT EXISTS plan_references TEXT;
 
     UPDATE schedule_tasks
     SET task_type = 'inspection'

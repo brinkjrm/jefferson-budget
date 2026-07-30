@@ -44,7 +44,7 @@ export function createProjectModel(collections = {}, options = {}) {
       ...row,
       trade: row.trade || metadata.trade || '',
       task_type: row.task_type || metadata.type || 'work',
-      references: row.references || metadata.references || '',
+      references: row.plan_references || metadata.references || '',
     }
   })
 

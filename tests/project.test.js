@@ -20,7 +20,7 @@ test('legacy collections are composed into a project-centric model', () => {
     lineItems: [{ id: 'budget-1' }],
     scheduleTasks: [
       { id: 'phase-1', parent_id: null },
-      { id: 'task-1', parent_id: 'phase-1' },
+      { id: 'task-1', parent_id: 'phase-1', plan_references: 'S0.0' },
     ],
   })
 
@@ -28,6 +28,7 @@ test('legacy collections are composed into a project-centric model', () => {
   assert.equal(model.financials.budgetItems.length, 1)
   assert.equal(model.schedule.phases.length, 1)
   assert.equal(model.schedule.tasks.length, 1)
+  assert.equal(model.schedule.tasks[0].references, 'S0.0')
 })
 
 test('project metrics aggregate budget, schedule, inspections, and decisions', () => {
@@ -63,4 +64,3 @@ test('project metrics aggregate budget, schedule, inspections, and decisions', (
   assert.ok(actions.some(action => action.type === 'decision'))
   assert.ok(actions.some(action => action.type === 'budget'))
 })
-

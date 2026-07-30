@@ -62,7 +62,7 @@ export async function replaceScheduleWithBlueprint(supabase, schedule, existingR
         id: row.id,
         task_type: source.type || 'work',
         trade: source.trade || null,
-        references: source.references || null,
+        plan_references: source.references || null,
       }
     })
     const { data: enrichedTasks, error: metadataError } = await supabase
@@ -89,5 +89,5 @@ export async function replaceScheduleWithBlueprint(supabase, schedule, existingR
 }
 
 function isMissingMetadataColumns(error) {
-  return error?.code === 'PGRST204' || /task_type|trade|references|schema cache/i.test(error?.message || '')
+  return error?.code === 'PGRST204' || /task_type|trade|plan_references|schema cache/i.test(error?.message || '')
 }

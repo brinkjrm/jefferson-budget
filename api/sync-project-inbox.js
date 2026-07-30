@@ -27,6 +27,38 @@ export default async function handler(req, res) {
       !String(row.email_to || '').toLowerCase().includes(projectAddress),
     )
 
+    let removedUnrelated = 0
+    let removedAttachments = 0
+    const cleanupRequested = req.body?.cleanupUnrelated === true
+    if (cleanupRequested) {
+      const expected = Number(req.body?.expectedUnrelated)
+      if (!Number.isInteger(expected) || expected !== unrelated.length) {
+        return res.status(409).json({
+          error: 'Cleanup count changed; no records were deleted',
+          expected,
+          actual: unrelated.length,
+        })
+      }
+
+      if (unrelated.length) {
+        const deleteResult = await supabase.from('project_emails')
+          .delete()
+          .in('id', unrelated.map(row => row.id))
+          .select('id')
+        if (deleteResult.error) throw deleteResult.error
+        removedUnrelated = deleteResult.data?.length || 0
+
+        const attachmentPaths = unrelated.flatMap(row =>
+          Array.isArray(row.attachments) ? row.attachments.map(item => item?.path).filter(Boolean) : [],
+        )
+        if (attachmentPaths.length) {
+          const storageResult = await supabase.storage.from('project-email-attachments').remove(attachmentPaths)
+          if (storageResult.error) throw storageResult.error
+          removedAttachments = storageResult.data?.length || 0
+        }
+      }
+    }
+
     return res.json({
       connected: true,
       imported: result.count,
@@ -35,6 +67,8 @@ export default async function handler(req, res) {
       audit: {
         recentImported: recentResult.data?.length || 0,
         unrelated: unrelated.length,
+        removedUnrelated,
+        removedAttachments,
       },
     })
   } catch (error) {

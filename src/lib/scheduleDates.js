@@ -167,6 +167,30 @@ export function hasDependencyCycle(tasks) {
   return [...taskIds].some(visit)
 }
 
+export function dependencyLinkError(tasks, predecessorId, successorId) {
+  if (!predecessorId || !successorId) return 'Choose two tasks to link.'
+  if (predecessorId === successorId) return 'A task cannot depend on itself.'
+  const predecessor = tasks.find(task => task.id === predecessorId && task.parent_id)
+  const successor = tasks.find(task => task.id === successorId && task.parent_id)
+  if (!predecessor || !successor) return 'Only schedule tasks can be linked.'
+  if ((successor.depends_on || []).includes(predecessorId)) return 'These tasks are already linked.'
+  const candidate = tasks.map(task => task.id === successorId
+    ? { ...task, depends_on: [...(task.depends_on || []), predecessorId] }
+    : task)
+  return hasDependencyCycle(candidate) ? 'That link would create a circular dependency.' : null
+}
+
+export function addDependencyLink(tasks, predecessorId, successorId) {
+  const error = dependencyLinkError(tasks, predecessorId, successorId)
+  if (error) return { tasks, error }
+  return {
+    tasks: tasks.map(task => task.id === successorId
+      ? { ...task, depends_on: [...(task.depends_on || []), predecessorId] }
+      : { ...task }),
+    error: null,
+  }
+}
+
 export function rollupPhaseDates(tasks) {
   const rolled = tasks.map(task => ({ ...task }))
   for (const phase of rolled.filter(task => !task.parent_id)) {

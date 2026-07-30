@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { buildJeffersonSchedule } from '../src/data/jeffersonSchedule.js'
 import {
+  addDependencyLink,
   addWorkdays,
   applyTaskChange,
   changedScheduleRows,
@@ -86,4 +87,17 @@ test('dependency cycles are rejected', () => {
     { id: 'a', parent_id: 'phase', depends_on: [] },
     { id: 'b', parent_id: 'phase', depends_on: ['a'] },
   ]), false)
+})
+
+test('drag-created dependencies reject duplicates and circular links', () => {
+  const tasks = [
+    { id: 'a', parent_id: 'phase', depends_on: [] },
+    { id: 'b', parent_id: 'phase', depends_on: ['a'] },
+    { id: 'c', parent_id: 'phase', depends_on: ['b'] },
+  ]
+  assert.match(addDependencyLink(tasks, 'a', 'b').error, /already linked/i)
+  assert.match(addDependencyLink(tasks, 'c', 'a').error, /circular/i)
+  const result = addDependencyLink(tasks, 'a', 'c')
+  assert.equal(result.error, null)
+  assert.deepEqual(result.tasks.find(task => task.id === 'c').depends_on, ['b', 'a'])
 })

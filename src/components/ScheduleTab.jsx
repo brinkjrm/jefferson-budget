@@ -2,11 +2,13 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useProjectCollection } from '../context/ProjectContext.jsx'
 import { buildJeffersonSchedule, getJeffersonTaskMetadata } from '../data/jeffersonSchedule.js'
 import {
+  addDependencyLink,
   addCalendarDays,
   addWorkdays,
   applyTaskChange,
   changedScheduleRows,
   diffCalendarDays,
+  dependencyLinkError,
   earliestDependencyStart,
   enforceDependencies,
   formatShortDate,
@@ -81,6 +83,8 @@ export default function ScheduleTab() {
   const [editingId, setEditingId] = useState(null)
   const [editFields, setEditFields] = useState({})
   const [drag, setDrag] = useState(null)
+  const [linkDrag, setLinkDrag] = useState(null)
+  const [selectedDependency, setSelectedDependency] = useState(null)
   const [reorder, setReorder] = useState(null)
   const [hoveredId, setHoveredId] = useState(null)
   const [zoomIndex, setZoomIndex] = useState(ZOOM_DEFAULT)
@@ -91,9 +95,13 @@ export default function ScheduleTab() {
   const dayWidthRef = useRef(dayWidth)
   const tasksRef = useRef(tasks)
   const flatListRef = useRef([])
+  const linkDragRef = useRef(null)
+  const timelineBodyRef = useRef(null)
+  const ganttScrollRef = useRef(null)
 
   useEffect(() => { dayWidthRef.current = dayWidth }, [dayWidth])
   useEffect(() => { tasksRef.current = tasks }, [tasks])
+  useEffect(() => { linkDragRef.current = linkDrag }, [linkDrag])
   useEffect(() => {
     if (!notice) return undefined
     const timer = setTimeout(() => setNotice(null), 5000)
@@ -153,6 +161,30 @@ export default function ScheduleTab() {
     return persistTasks(candidate, [id], successText)
   }
 
+  async function createDependency(predecessorId, successorId) {
+    const result = addDependencyLink(tasksRef.current, predecessorId, successorId)
+    if (result.error) {
+      setNotice({ type: 'error', text: result.error })
+      return false
+    }
+    const predecessor = tasksRef.current.find(task => task.id === predecessorId)
+    const successor = tasksRef.current.find(task => task.id === successorId)
+    const saved = await persistTasks(result.tasks, [successorId], `${successor.name.replace(/^INSPECTION - /, '')} now starts after ${predecessor.name.replace(/^INSPECTION - /, '')}`)
+    if (saved) setSelectedDependency({ fromId: predecessorId, toId: successorId })
+    return saved
+  }
+
+  async function removeDependency(predecessorId, successorId) {
+    const successor = tasksRef.current.find(task => task.id === successorId)
+    if (!successor) return false
+    const candidate = tasksRef.current.map(task => task.id === successorId
+      ? { ...task, depends_on: (task.depends_on || []).filter(id => id !== predecessorId) }
+      : task)
+    const saved = await persistTasks(candidate, [successorId], 'Dependency removed')
+    if (saved) setSelectedDependency(null)
+    return saved
+  }
+
   useEffect(() => {
     if (!drag) return undefined
     const onMove = event => {
@@ -181,6 +213,55 @@ export default function ScheduleTab() {
       window.removeEventListener('mouseup', onUp)
     }
   }, [drag])
+
+  useEffect(() => {
+    if (!linkDrag?.sourceId) return undefined
+    const onMove = event => {
+      const body = timelineBodyRef.current
+      if (!body) return
+      const scroller = ganttScrollRef.current
+      if (scroller) {
+        const scrollRect = scroller.getBoundingClientRect()
+        const edge = 46
+        if (event.clientY > scrollRect.bottom - edge) scroller.scrollTop += 18
+        else if (event.clientY < scrollRect.top + HDR_H + edge) scroller.scrollTop -= 18
+        if (event.clientX > scrollRect.right - edge) scroller.scrollLeft += 18
+        else if (event.clientX < scrollRect.left + LIST_W + edge) scroller.scrollLeft -= 18
+      }
+      const rect = body.getBoundingClientRect()
+      const rowIndex = Math.floor((event.clientY - rect.top) / ROW_H)
+      const row = flatListRef.current[rowIndex]
+      const targetId = row && !row.isPhase ? row.task.id : null
+      const error = targetId ? dependencyLinkError(tasksRef.current, linkDrag.sourceId, targetId) : 'Drop on a task row.'
+      const next = {
+        ...linkDragRef.current,
+        x: Math.max(0, Math.min(event.clientX - rect.left, rect.width)),
+        y: Math.max(0, Math.min(event.clientY - rect.top, rect.height)),
+        targetId,
+        valid: Boolean(targetId && !error),
+        error,
+      }
+      linkDragRef.current = next
+      setLinkDrag(next)
+    }
+    const onUp = async () => {
+      const current = linkDragRef.current
+      linkDragRef.current = null
+      setLinkDrag(null)
+      setHoveredId(null)
+      if (current?.valid) {
+        await createDependency(current.sourceId, current.targetId)
+      } else if (current?.targetId && current?.error) {
+        setNotice({ type: 'error', text: current.error })
+      }
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [linkDrag?.sourceId])
 
   useEffect(() => {
     if (!reorder) return undefined
@@ -360,6 +441,27 @@ export default function ScheduleTab() {
     })
   }
 
+  function startLinkDrag(event, task) {
+    if (!task.parent_id) return
+    event.preventDefault()
+    event.stopPropagation()
+    const sourceIndex = flatListRef.current.findIndex(row => row.task.id === task.id)
+    const initial = {
+      sourceId: task.id,
+      sourceX: diffCalendarDays(timelineStart, task.end_date) * dayWidth + dayWidth,
+      sourceY: sourceIndex * ROW_H + ROW_H / 2,
+      x: diffCalendarDays(timelineStart, task.end_date) * dayWidth + dayWidth,
+      y: sourceIndex * ROW_H + ROW_H / 2,
+      targetId: null,
+      valid: false,
+      error: 'Drop on a task row.',
+    }
+    linkDragRef.current = initial
+    setLinkDrag(initial)
+    setSelectedDependency(null)
+    setHoveredId(task.id)
+  }
+
   function startReorder(event, task, flatIndex) {
     event.preventDefault()
     event.stopPropagation()
@@ -402,6 +504,8 @@ export default function ScheduleTab() {
   const completed = childTasks.filter(task => task.status === 'complete').length
   const editingTask = tasks.find(task => task.id === editingId)
   const dependencyName = id => (tasks.find(task => task.id === id)?.name || '').replace(/^INSPECTION - /, '')
+  const selectedPredecessor = selectedDependency && tasks.find(task => task.id === selectedDependency.fromId)
+  const selectedSuccessor = selectedDependency && tasks.find(task => task.id === selectedDependency.toId)
 
   function exportCsv() {
     const header = ['Phase', 'Task', 'Trade', 'Type', 'Start', 'Finish', 'Workdays', 'Predecessors', 'Plan references', 'Notes']
@@ -453,7 +557,7 @@ export default function ScheduleTab() {
           </button>
           <button onClick={exportCsv} className="btn-secondary text-xs px-3 py-2">Export CSV</button>
           <button onClick={() => window.print()} className="btn-secondary text-xs px-3 py-2">Print / Save PDF</button>
-          <span className="text-lbl3 text-xs hidden xl:inline">Monday-Friday calendar. Moving a task immediately moves any conflicting successors.</span>
+          <span className="text-lbl3 text-xs hidden xl:inline">Monday-Friday calendar · successors move automatically.</span>
           <div className="ml-auto flex items-center gap-1">
             <span className="text-lbl3 text-xs mr-1">Zoom</span>
             <button onClick={() => setZoomIndex(index => Math.max(0, index - 1))} disabled={zoomIndex === 0} className="btn-secondary text-xs px-2 py-1">-</button>
@@ -470,7 +574,26 @@ export default function ScheduleTab() {
           <DependencyLegend />
         </div>
 
-        <div className="apple-card schedule-gantt" style={{ overflow: 'auto', maxHeight: '70vh' }}>
+        <div className="no-print flex items-center gap-3 mb-3 rounded-lg px-3 py-2 text-xs flex-wrap" style={{ background: 'rgba(10,132,255,0.07)', border: '1px solid rgba(10,132,255,0.16)' }}>
+          <span style={{ color: '#0a84ff', fontWeight: 700 }}>Quick edit</span>
+          <span className="text-lbl3">Drag a bar to move it</span>
+          <span className="text-lbl3">·</span>
+          <span className="text-lbl3">Drag its right edge to change duration</span>
+          <span className="text-lbl3">·</span>
+          <span className="text-lbl3">Drag the gold dot to another task to link them</span>
+        </div>
+
+        {selectedPredecessor && selectedSuccessor && (
+          <div className="no-print flex items-center gap-2 mb-3 rounded-lg px-3 py-2 text-xs" style={{ background: 'rgba(255,179,64,0.10)', border: '1px solid rgba(255,179,64,0.24)' }}>
+            <span style={{ color: '#ffb340', fontWeight: 700 }}>Selected dependency</span>
+            <span className="text-white truncate">{selectedPredecessor.name.replace(/^INSPECTION - /, '')} → {selectedSuccessor.name.replace(/^INSPECTION - /, '')}</span>
+            <div className="flex-1" />
+            <button onClick={() => removeDependency(selectedDependency.fromId, selectedDependency.toId)} className="text-neg font-semibold flex-shrink-0">Remove link</button>
+            <button onClick={() => setSelectedDependency(null)} className="text-lbl3 text-base leading-none flex-shrink-0" title="Close">×</button>
+          </div>
+        )}
+
+        <div ref={ganttScrollRef} className="apple-card schedule-gantt" style={{ overflow: 'auto', maxHeight: '70vh' }}>
           <div style={{ minWidth: LIST_W + timelineWidth }}>
             <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 20, height: HDR_H, background: '#1c1c1e', borderBottom: '1px solid rgba(84,84,88,0.4)' }}>
               <div style={{ width: LIST_W, minWidth: LIST_W, position: 'sticky', left: 0, zIndex: 30, background: '#1c1c1e', display: 'flex', alignItems: 'flex-end', padding: '0 16px 10px', borderRight: '1px solid rgba(84,84,88,0.3)' }}>
@@ -535,7 +658,7 @@ export default function ScheduleTab() {
                 })}
               </div>
 
-              <div style={{ flex: 1, position: 'relative', height: bodyHeight }}>
+              <div ref={timelineBodyRef} style={{ flex: 1, position: 'relative', height: bodyHeight }}>
                 {weeks.map((_, index) => (
                   <React.Fragment key={index}>
                     <div style={{ position: 'absolute', top: 0, bottom: 0, left: index * weekWidth, width: 1, background: 'rgba(84,84,88,0.2)', pointerEvents: 'none' }} />
@@ -544,6 +667,11 @@ export default function ScheduleTab() {
                 ))}
                 {new Date() >= timelineStart && new Date() <= timelineEnd && <div style={{ position: 'absolute', top: 0, bottom: 0, left: diffCalendarDays(timelineStart, new Date()) * dayWidth, width: 1, background: 'rgba(255,69,58,0.7)', zIndex: 4, pointerEvents: 'none' }} />}
                 {flatList.map((_, index) => <div key={index} style={{ position: 'absolute', left: 0, right: 0, top: (index + 1) * ROW_H - 1, height: 1, background: 'rgba(84,84,88,0.2)', pointerEvents: 'none' }} />)}
+                {linkDrag?.targetId && (() => {
+                  const targetIndex = flatList.findIndex(row => row.task.id === linkDrag.targetId)
+                  if (targetIndex < 0) return null
+                  return <div style={{ position: 'absolute', left: 0, right: 0, top: targetIndex * ROW_H, height: ROW_H, background: linkDrag.valid ? 'rgba(48,209,88,0.10)' : 'rgba(255,69,58,0.10)', border: `1px solid ${linkDrag.valid ? 'rgba(48,209,88,0.45)' : 'rgba(255,69,58,0.45)'}`, zIndex: 1, pointerEvents: 'none' }} />
+                })()}
 
                 {flatList.map(({ task, isPhase, phaseColor }, index) => {
                   if (!task.start_date || !task.end_date) return null
@@ -554,25 +682,35 @@ export default function ScheduleTab() {
                   const barHeight = isPhase ? 30 : 20
                   const baseColor = task.status && task.status !== 'not_started' ? STATUS_MAP[task.status]?.color || phaseColor : metadata.type === 'procurement' ? '#bf5af2' : metadata.type === 'inspection' ? '#ff9f0a' : phaseColor
                   const top = index * ROW_H + (ROW_H - barHeight) / 2
+                  const showLinkHandles = !isPhase && (hoveredId === task.id || Boolean(linkDrag))
+                  const isLinkTarget = linkDrag?.targetId === task.id
                   if (isInspection && !isPhase) {
-                    return <div key={task.id} onMouseDown={event => startBarDrag(event, task, 'move')} title={`${task.name}: ${formatShortDate(task.start_date)}`} style={{ position: 'absolute', top: top + 3, left: left - 1, width: 14, height: 14, background: baseColor, border: '2px solid #1c1c1e', transform: 'rotate(45deg)', borderRadius: 2, cursor: 'grab', zIndex: 5 }} />
+                    return <div key={task.id} data-gantt-task-id={task.id} onMouseEnter={() => setHoveredId(task.id)} onMouseLeave={() => !linkDrag && setHoveredId(null)} style={{ position: 'absolute', top: top + 3, left: left - 1, width: 14, height: 14, zIndex: 5 }}>
+                      <div onMouseDown={event => startBarDrag(event, task, 'move')} title={`${task.name}: ${formatShortDate(task.start_date)}`} style={{ position: 'absolute', inset: 0, background: baseColor, border: '2px solid #1c1c1e', transform: 'rotate(45deg)', borderRadius: 2, cursor: 'grab' }} />
+                      {showLinkHandles && <span style={{ position: 'absolute', left: -11, top: 3, width: 8, height: 8, borderRadius: '50%', background: isLinkTarget ? (linkDrag.valid ? '#30d158' : '#ff453a') : '#ffb340', border: '2px solid #1c1c1e', pointerEvents: 'none' }} />}
+                      <button type="button" aria-label={`Create dependency after ${task.name}`} title="Drag to the task that should happen next" onMouseDown={event => startLinkDrag(event, task)} style={{ position: 'absolute', right: -13, top: 1, width: 12, height: 12, borderRadius: '50%', background: '#ffb340', border: '2px solid #1c1c1e', cursor: 'crosshair', zIndex: 9, opacity: hoveredId === task.id || linkDrag?.sourceId === task.id ? 1 : 0.28, transition: 'opacity 120ms ease' }} />
+                    </div>
                   }
                   return (
                     <div key={task.id}>
-                      <div onMouseDown={event => startBarDrag(event, task, 'move')} title={`${task.name}: ${formatShortDate(task.start_date)} - ${formatShortDate(task.end_date)} (${workdayDuration(task.start_date, task.end_date)} workdays)`} style={{
+                      <div data-gantt-task-id={task.id} onMouseEnter={() => setHoveredId(task.id)} onMouseLeave={() => !linkDrag && setHoveredId(null)} onMouseDown={event => startBarDrag(event, task, 'move')} title={`${task.name}: ${formatShortDate(task.start_date)} - ${formatShortDate(task.end_date)} (${workdayDuration(task.start_date, task.end_date)} workdays)`} style={{
                         position: 'absolute', top, left, width, height: barHeight,
                         background: isPhase ? baseColor : hexToRgba(baseColor, metadata.type === 'procurement' ? 0.42 : 0.3),
                         border: isPhase ? 'none' : `1.5px solid ${baseColor}`, borderRadius: isPhase ? 4 : 5,
                         opacity: isPhase ? 0.95 : 1, cursor: isPhase ? 'default' : drag?.taskId === task.id ? 'grabbing' : 'grab',
-                        display: 'flex', alignItems: 'center', overflow: 'hidden', zIndex: 2,
+                        display: 'flex', alignItems: 'center', overflow: 'visible', zIndex: 2,
                       }}>
-                        {width > (isPhase ? 72 : 64) && <span style={{ fontSize: isPhase ? 12 : 10, fontWeight: isPhase ? 700 : 600, color: isPhase ? '#fff' : baseColor, paddingLeft: 7, overflow: 'hidden', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none' }}>{task.name.replace(/^INSPECTION - /, '')}</span>}
-                        {!isPhase && <div onMouseDown={event => startBarDrag(event, task, 'resize')} style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 7, cursor: 'ew-resize', background: 'rgba(0,0,0,0.18)', borderRadius: '0 5px 5px 0' }} />}
+                        {width > (isPhase ? 72 : 64) && <span style={{ width: '100%', fontSize: isPhase ? 12 : 10, fontWeight: isPhase ? 700 : 600, color: isPhase ? '#fff' : baseColor, padding: '0 9px 0 7px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', pointerEvents: 'none', userSelect: 'none' }}>{task.name.replace(/^INSPECTION - /, '')}</span>}
+                        {!isPhase && <div title="Drag to change duration" onMouseDown={event => startBarDrag(event, task, 'resize')} style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 7, cursor: 'ew-resize', background: 'rgba(0,0,0,0.18)', borderRadius: '0 5px 5px 0', zIndex: 6 }} />}
+                        {showLinkHandles && !isPhase && <span style={{ position: 'absolute', left: -10, top: '50%', width: 9, height: 9, marginTop: -4.5, borderRadius: '50%', background: isLinkTarget ? (linkDrag.valid ? '#30d158' : '#ff453a') : '#ffb340', border: '2px solid #1c1c1e', pointerEvents: 'none', zIndex: 8 }} />}
+                        {!isPhase && <button type="button" aria-label={`Create dependency after ${task.name}`} title="Drag to the task that should happen next" onMouseDown={event => startLinkDrag(event, task)} style={{ position: 'absolute', right: -13, top: '50%', width: 12, height: 12, marginTop: -6, borderRadius: '50%', background: '#ffb340', border: '2px solid #1c1c1e', cursor: 'crosshair', zIndex: 9, opacity: hoveredId === task.id || linkDrag?.sourceId === task.id ? 1 : 0.28, transition: 'opacity 120ms ease' }} />}
+                        {drag?.taskId === task.id && <span style={{ position: 'absolute', left: '50%', top: -27, transform: 'translateX(-50%)', padding: '3px 7px', borderRadius: 6, background: '#2c2c2e', border: '1px solid rgba(255,255,255,0.16)', color: '#fff', fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 10 }}>{formatShortDate(task.start_date)} → {formatShortDate(task.end_date)}</span>}
                       </div>
                     </div>
                   )
                 })}
-                <DependencyArrows flatList={flatList} timelineStart={timelineStart} bodyHeight={bodyHeight} timelineWidth={timelineWidth} dayWidth={dayWidth} activeTaskId={editingId || hoveredId || drag?.taskId} />
+                <DependencyArrows flatList={flatList} timelineStart={timelineStart} bodyHeight={bodyHeight} timelineWidth={timelineWidth} dayWidth={dayWidth} activeTaskId={editingId || hoveredId || drag?.taskId || linkDrag?.sourceId} selectedDependency={selectedDependency} onSelect={setSelectedDependency} />
+                {linkDrag && <DependencyDraft linkDrag={linkDrag} />}
               </div>
             </div>
           </div>
@@ -600,7 +738,7 @@ function DependencyLegend() {
   return <span className="flex items-center gap-1.5"><span style={{ color: '#ffb340', fontWeight: 700, letterSpacing: -1 }}>—›</span>Predecessor → successor</span>
 }
 
-function DependencyArrows({ flatList, timelineStart, bodyHeight, timelineWidth, dayWidth, activeTaskId }) {
+function DependencyArrows({ flatList, timelineStart, bodyHeight, timelineWidth, dayWidth, activeTaskId, selectedDependency, onSelect }) {
   const arrows = []
   flatList.forEach(({ task }, toIndex) => {
     ;(task.depends_on || []).forEach(dependencyId => {
@@ -622,13 +760,14 @@ function DependencyArrows({ flatList, timelineStart, bodyHeight, timelineWidth, 
   })
   if (!arrows.length) return null
   return (
-    <svg style={{ position: 'absolute', top: 0, left: 0, width: timelineWidth, height: bodyHeight, pointerEvents: 'none', zIndex: 3 }}>
+    <svg style={{ position: 'absolute', top: 0, left: 0, width: timelineWidth, height: bodyHeight, pointerEvents: 'none', zIndex: 1 }}>
       <defs>
         <marker id="dependency-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L0,7 L7,3.5 z" fill="#ffb340" /></marker>
         <marker id="dependency-arrow-muted" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 z" fill="rgba(255,179,64,0.5)" /></marker>
       </defs>
       {arrows.map(({ x1, y1, x2, y2, fromId, toId, label, key }) => {
-        const active = Boolean(activeTaskId && (activeTaskId === fromId || activeTaskId === toId))
+        const selected = selectedDependency?.fromId === fromId && selectedDependency?.toId === toId
+        const active = selected || Boolean(activeTaskId && (activeTaskId === fromId || activeTaskId === toId))
         const opacity = active ? 1 : activeTaskId ? 0.1 : 0.3
         const elbowX = Math.max(x1 + 12, x2 - 10)
         const path = x2 > x1 + 8
@@ -637,11 +776,27 @@ function DependencyArrows({ flatList, timelineStart, bodyHeight, timelineWidth, 
         return <g key={key} opacity={opacity}>
           <title>{label}</title>
           <circle cx={x1} cy={y1} r={active ? 2.5 : 2} fill={active ? '#ffb340' : 'rgba(255,179,64,0.5)'} />
-          <path d={path} fill="none" stroke={active ? '#ffb340' : 'rgba(255,179,64,0.5)'} strokeWidth={active ? 1.8 : 1.1} markerEnd={active ? 'url(#dependency-arrow)' : 'url(#dependency-arrow-muted)'} />
+          <path d={path} fill="none" stroke="transparent" strokeWidth="14" pointerEvents="stroke" style={{ cursor: 'pointer' }} onClick={() => onSelect({ fromId, toId })} />
+          <path d={path} fill="none" stroke={active ? '#ffb340' : 'rgba(255,179,64,0.5)'} strokeWidth={selected ? 2.6 : active ? 1.8 : 1.1} markerEnd={active ? 'url(#dependency-arrow)' : 'url(#dependency-arrow-muted)'} pointerEvents="none" />
         </g>
       })}
     </svg>
   )
+}
+
+function DependencyDraft({ linkDrag }) {
+  const color = linkDrag.valid ? '#30d158' : linkDrag.targetId ? '#ff453a' : '#ffb340'
+  const elbowX = Math.max(linkDrag.sourceX + 16, linkDrag.x - 18)
+  const path = `M${linkDrag.sourceX},${linkDrag.sourceY} L${elbowX},${linkDrag.sourceY} L${elbowX},${linkDrag.y} L${linkDrag.x},${linkDrag.y}`
+  return <>
+    <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', overflow: 'visible', zIndex: 12 }}>
+      <path d={path} fill="none" stroke={color} strokeWidth="2" strokeDasharray="5 4" />
+      <circle cx={linkDrag.x} cy={linkDrag.y} r="5" fill={color} stroke="#1c1c1e" strokeWidth="2" />
+    </svg>
+    <div style={{ position: 'absolute', left: linkDrag.x + 10, top: Math.max(4, linkDrag.y - 28), padding: '4px 7px', borderRadius: 6, background: '#2c2c2e', border: `1px solid ${color}`, color, fontSize: 10, fontWeight: 700, whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 13 }}>
+      {linkDrag.valid ? 'Release to create dependency' : linkDrag.error}
+    </div>
+  </>
 }
 
 function EditModal({ task, fields, setFields, tasks, isPhase, onSave, onCancel, onDelete, onAddTask }) {

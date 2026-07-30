@@ -104,6 +104,7 @@ export default function ScheduleTab() {
   const [zoomIndex, setZoomIndex] = useState(ZOOM_DEFAULT)
   const [notice, setNotice] = useState(null)
   const [undoSnapshot, setUndoSnapshot] = useState(null)
+  const [isExpanded, setIsExpanded] = useState(false)
 
   const weekWidth = ZOOM_LEVELS[zoomIndex]
   const dayWidth = weekWidth / 7
@@ -113,6 +114,8 @@ export default function ScheduleTab() {
   const linkDragRef = useRef(null)
   const timelineBodyRef = useRef(null)
   const ganttScrollRef = useRef(null)
+  const expandButtonRef = useRef(null)
+  const closeExpandedRef = useRef(null)
 
   useEffect(() => { dayWidthRef.current = dayWidth }, [dayWidth])
   useEffect(() => { tasksRef.current = tasks }, [tasks])
@@ -122,6 +125,29 @@ export default function ScheduleTab() {
     const timer = setTimeout(() => setNotice(null), 5000)
     return () => clearTimeout(timer)
   }, [notice])
+  useEffect(() => {
+    if (!isExpanded) return undefined
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    requestAnimationFrame(() => closeExpandedRef.current?.focus())
+    const onKeyDown = event => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      if (editingId) setEditingId(null)
+      else if (selectedDependency) setSelectedDependency(null)
+      else closeExpandedWorkspace()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [isExpanded, editingId, selectedDependency])
+
+  function closeExpandedWorkspace() {
+    setIsExpanded(false)
+    requestAnimationFrame(() => expandButtonRef.current?.focus())
+  }
 
   async function load() {
     const result = await refreshTasks()
@@ -618,13 +644,29 @@ export default function ScheduleTab() {
 
   return (
     <div>
-      <div className="schedule-screen">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+      <div className="schedule-screen" role={isExpanded ? 'dialog' : undefined} aria-modal={isExpanded || undefined} aria-label={isExpanded ? 'Expanded construction schedule' : undefined} style={isExpanded ? {
+        position: 'fixed', inset: 0, zIndex: 80, height: '100dvh', padding: 14, background: '#000',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden', boxSizing: 'border-box',
+      } : undefined}>
+        {isExpanded && (
+          <div className="no-print flex items-center gap-4 mb-3" style={{ flexShrink: 0 }}>
+            <div style={{ minWidth: 0 }}>
+              <div className="text-lbl3 uppercase tracking-widest" style={{ fontSize: 10, fontWeight: 750 }}>Full-screen workspace</div>
+              <div className="text-white font-semibold truncate" style={{ fontSize: 17 }}>Construction Schedule</div>
+              <div className="text-lbl3 truncate" style={{ fontSize: 11 }}>{formatShortDate(projectStart, { includeYear: true })} – {formatShortDate(projectEnd, { includeYear: true })} · Monday–Friday</div>
+            </div>
+            <span className="text-lbl3 ml-auto hidden sm:inline" style={{ fontSize: 11 }}>Press Esc to close</span>
+            <button ref={closeExpandedRef} type="button" onClick={closeExpandedWorkspace} aria-label="Close expanded schedule" title="Close expanded schedule"
+              className="btn-secondary flex items-center justify-center" style={{ width: 38, height: 38, borderRadius: 10, fontSize: 23, lineHeight: 1 }}>×</button>
+          </div>
+        )}
+
+        {!isExpanded && <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
           <SummaryCard label="Planned Start" value={formatShortDate(projectStart, { includeYear: true })} />
           <SummaryCard label="Substantial Completion" value={formatShortDate(projectEnd, { includeYear: true })} />
           <SummaryCard label="Working Days" value={workdayDuration(projectStart, projectEnd)} detail="Monday-Friday" />
           <SummaryCard label="Inspection Gates" value={inspections} detail={`${completed}/${childTasks.length} tasks complete`} />
-        </div>
+        </div>}
 
         {notice && (
           <div className="mb-4 rounded-apple px-4 py-3 text-sm" style={{
@@ -644,6 +686,7 @@ export default function ScheduleTab() {
           {undoSnapshot && <button onClick={undoLastChange} className="btn-secondary text-xs px-3 py-2" title={undoSnapshot.label}>↶ Undo</button>}
           <span className="text-lbl3 text-xs hidden xl:inline">Monday-Friday calendar · successors move automatically.</span>
           <div className="ml-auto flex items-center gap-1">
+            {!isExpanded && <button ref={expandButtonRef} type="button" onClick={() => setIsExpanded(true)} className="btn-secondary text-xs px-3 py-1.5 mr-2" aria-label="Expand schedule workspace" title="Open the schedule in a full-screen workspace">⛶ Expand</button>}
             <span className="text-lbl3 text-xs mr-1">Zoom</span>
             <button onClick={() => setZoomIndex(index => Math.max(0, index - 1))} disabled={zoomIndex === 0} className="btn-secondary text-xs px-2 py-1">-</button>
             <span className="text-lbl3 text-xs w-8 text-center">{weekWidth}px</span>
@@ -659,14 +702,14 @@ export default function ScheduleTab() {
           <DependencyLegend />
         </div>
 
-        <div className="no-print flex items-center gap-3 mb-3 rounded-lg px-3 py-2 text-xs flex-wrap" style={{ background: 'rgba(10,132,255,0.07)', border: '1px solid rgba(10,132,255,0.16)' }}>
+        {!isExpanded && <div className="no-print flex items-center gap-3 mb-3 rounded-lg px-3 py-2 text-xs flex-wrap" style={{ background: 'rgba(10,132,255,0.07)', border: '1px solid rgba(10,132,255,0.16)' }}>
           <span style={{ color: '#0a84ff', fontWeight: 700 }}>Quick edit</span>
           <span className="text-lbl3">Drag a bar to move it</span>
           <span className="text-lbl3">·</span>
           <span className="text-lbl3">Drag either edge to resize it</span>
           <span className="text-lbl3">·</span>
           <span className="text-lbl3">Drag a gold endpoint to another task to link them</span>
-        </div>
+        </div>}
 
         {selectedPredecessor && selectedSuccessor && <DependencyEditor
           predecessor={selectedPredecessor}
@@ -679,7 +722,7 @@ export default function ScheduleTab() {
           onClose={() => setSelectedDependency(null)}
         />}
 
-        <div ref={ganttScrollRef} className="apple-card schedule-gantt" style={{ overflow: 'auto', maxHeight: '70vh' }}>
+        <div ref={ganttScrollRef} className="apple-card schedule-gantt" style={{ overflow: 'auto', maxHeight: isExpanded ? 'none' : '70vh', minHeight: 0, flex: isExpanded ? '1 1 0' : undefined }}>
           <div style={{ minWidth: LIST_W + timelineWidth }}>
             <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 20, height: HDR_H, background: '#1c1c1e', borderBottom: '1px solid rgba(84,84,88,0.4)' }}>
               <div style={{ width: LIST_W, minWidth: LIST_W, position: 'sticky', left: 0, zIndex: 30, background: '#1c1c1e', display: 'flex', alignItems: 'flex-end', padding: '0 10px 10px 16px', borderRight: '1px solid rgba(84,84,88,0.3)', gap: 8 }}>
@@ -979,7 +1022,7 @@ function EditModal({ task, fields, setFields, tasks, isPhase, onSave, onCancel, 
     .filter(item => !filter || `${item.phase?.name || ''} ${item.name}`.toLowerCase().includes(filter))
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', pointerEvents: 'none' }}>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', pointerEvents: 'none' }}>
       <div style={{ width: '100%', maxWidth: 940, background: '#1c1c1e', border: '1px solid rgba(84,84,88,0.5)', borderBottom: 'none', borderRadius: '16px 16px 0 0', padding: 20, boxShadow: '0 -8px 40px rgba(0,0,0,0.6)', pointerEvents: 'all' }}>
         <div className="flex items-center gap-2 mb-4">
           <span className="text-lbl3 uppercase tracking-wider font-semibold" style={{ fontSize: 11 }}>{isPhase ? 'Edit phase' : 'Edit task'}</span>

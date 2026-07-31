@@ -2,9 +2,12 @@
 // Fetches a plan PDF from storage and answers a question about it using Claude.
 //
 // Required env var: ANTHROPIC_API_KEY
+import { hasProjectPlanAccess } from '../server/projectPlans.js'
+import { anthropicFailure } from '../server/anthropicFailure.js'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
+  if (!hasProjectPlanAccess(req)) return res.status(401).json({ error: 'Private plan access is required' })
 
   const { pdfUrl, question } = req.body
   if (!pdfUrl || !question) return res.status(400).json({ error: 'pdfUrl and question required' })
@@ -55,8 +58,8 @@ If the answer isn't visible in the plan, say so clearly.`,
     })
 
     if (!response.ok) {
-      const err = await response.text()
-      return res.status(response.status).json({ error: err })
+      const failure = anthropicFailure(response.status, await response.text())
+      return res.status(failure.status).json(failure.body)
     }
 
     const data = await response.json()

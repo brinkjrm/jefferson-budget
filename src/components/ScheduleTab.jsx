@@ -448,6 +448,10 @@ export default function ScheduleTab() {
 
   async function addTask(parentId) {
     const parent = tasksRef.current.find(task => task.id === parentId)
+    if (!parent || parent.parent_id) {
+      setNotice({ type: 'error', text: 'Choose a phase before adding a task.' })
+      return
+    }
     const start = toDateString(normalizeWorkday(parent?.start_date || new Date()))
     const siblings = tasksRef.current.filter(task => task.parent_id === parentId)
     const { data, error } = await supabase.from('schedule_tasks').insert({
@@ -459,6 +463,11 @@ export default function ScheduleTab() {
     const next = rollupPhaseDates([...tasksRef.current, data])
     tasksRef.current = next
     setTasks(next)
+    setCollapsed(value => {
+      const expanded = new Set(value)
+      expanded.delete(parentId)
+      return expanded
+    })
     openEdit(data)
   }
 
@@ -704,6 +713,8 @@ export default function ScheduleTab() {
 
         {!isExpanded && <div className="no-print flex items-center gap-3 mb-3 rounded-lg px-3 py-2 text-xs flex-wrap" style={{ background: 'rgba(10,132,255,0.07)', border: '1px solid rgba(10,132,255,0.16)' }}>
           <span style={{ color: '#0a84ff', fontWeight: 700 }}>Quick edit</span>
+          <span className="text-lbl3">Use + Task on any phase to add work</span>
+          <span className="text-lbl3">·</span>
           <span className="text-lbl3">Drag a bar to move it</span>
           <span className="text-lbl3">·</span>
           <span className="text-lbl3">Drag either edge to resize it</span>
@@ -785,7 +796,27 @@ export default function ScheduleTab() {
                       {!isPhase && <button onClick={() => openEdit(task)} title="Edit finish date" style={{ width: 62, flexShrink: 0, color: '#ebebf5', fontSize: 10, textAlign: 'left', fontVariantNumeric: 'tabular-nums' }}>{formatShortDate(task.end_date)}</button>}
                       {isPhase && <span style={{ width: 132, flexShrink: 0, color: '#8e8e93', fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>{formatShortDate(task.start_date)} – {formatShortDate(task.end_date)}</span>}
                       <span style={{ color: STATUS_MAP[task.status]?.color || '#8E8E93', fontSize: 9, flexShrink: 0 }}>●</span>
-                      {isPhase && <button onClick={event => { event.stopPropagation(); addTask(task.id) }} style={{ fontSize: 14, fontWeight: 700, color: '#0a84ff', flexShrink: 0, opacity: hoveredId === task.id ? 1 : 0, width: 18 }} title="Add task">+</button>}
+                      {isPhase && (
+                        <button
+                          type="button"
+                          onClick={event => { event.stopPropagation(); addTask(task.id) }}
+                          aria-label={`Add task to ${task.name}`}
+                          title={`Add a task to ${task.name}`}
+                          style={{
+                            flexShrink: 0,
+                            color: '#0a84ff',
+                            background: 'rgba(10,132,255,0.12)',
+                            border: '1px solid rgba(10,132,255,0.28)',
+                            borderRadius: 6,
+                            padding: '4px 7px',
+                            fontSize: 10,
+                            fontWeight: 750,
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          + Task
+                        </button>
+                      )}
                       <button onClick={event => { event.stopPropagation(); deleteTask(task.id) }} style={{ color: '#ff453a', fontSize: 14, width: 18, flexShrink: 0, opacity: hoveredId === task.id ? 1 : 0 }} title="Delete">×</button>
                     </div>
                   )

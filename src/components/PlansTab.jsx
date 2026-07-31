@@ -163,14 +163,17 @@ export default function PlansTab() {
     try {
       const res = await fetch('/api/query-plan', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          'x-project-access-code': accessCode,
+        },
         body: JSON.stringify({ pdfUrl: selected.file_url, question: question.trim() }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Request failed')
       setAnswer(data.answer)
     } catch (err) {
-      setAnswer('Error: ' + err.message)
+      setAnswer(err.message)
     } finally {
       setAsking(false)
     }

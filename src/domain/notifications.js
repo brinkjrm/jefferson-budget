@@ -77,6 +77,24 @@ export function buildDailySmsSummary({
   return `${content}\n${complianceFooter}`
 }
 
+export function buildScheduleNoteSms({
+  taskName,
+  authorName,
+  body,
+  dashboardUrl = '',
+} = {}) {
+  const lines = [
+    'Jefferson Construction Manager: New schedule note',
+    `Task: ${compact(taskName || 'Unknown task', 120)}`,
+    `From: ${compact(authorName || 'Shared user', 80)}`,
+    compact(body, 600),
+  ]
+  if (dashboardUrl) lines.push(dashboardUrl.replace(/\/$/, ''))
+  const complianceFooter = 'Reply STOP to opt out, HELP for help. Msg & data rates may apply.'
+  const content = compact(lines.filter(Boolean).join('\n'), 1200 - complianceFooter.length - 1)
+  return `${content}\n${complianceFooter}`
+}
+
 function localDateString(date, timezone) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: timezone,

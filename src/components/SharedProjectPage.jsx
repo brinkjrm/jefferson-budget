@@ -62,9 +62,9 @@ export default function SharedProjectPage({ token, initialTab = 'Schedule' }) {
           <div className="flex items-center justify-between gap-4 py-3">
             <div>
               <h1 className="text-white font-bold tracking-tight" style={{ fontSize: 17 }}>{projectName}</h1>
-              <p className="text-lbl2 text-xs tracking-wide">Shared project portal · View only</p>
+              <p className="text-lbl2 text-xs tracking-wide">Shared project portal · Schedule comments enabled</p>
             </div>
-            <span className="text-xs rounded-full px-3 py-1.5" style={{ color: '#30d158', background: 'rgba(48,209,88,0.12)' }}>Read only</span>
+            <span className="text-xs rounded-full px-3 py-1.5" style={{ color: '#30d158', background: 'rgba(48,209,88,0.12)' }}>Limited access</span>
           </div>
           <nav className="flex gap-1 overflow-x-auto whitespace-nowrap" aria-label="Shared project sections">
             {TABS.map(item => (
@@ -92,7 +92,19 @@ export default function SharedProjectPage({ token, initialTab = 'Schedule' }) {
         )}
         {!loading && !error && data && (
           <>
-            {tab === 'Schedule' && <SharedSchedule tasks={data.schedule || []} />}
+            {tab === 'Schedule' && (
+              <SharedSchedule
+                tasks={data.schedule || []}
+                notes={data.scheduleNotes || []}
+                token={token}
+                onNoteAdded={note => setData(current => ({
+                  ...current,
+                  scheduleNotes: (current.scheduleNotes || []).some(item => item.id === note.id)
+                    ? current.scheduleNotes
+                    : [...(current.scheduleNotes || []), note],
+                }))}
+              />
+            )}
             {tab === 'Selections' && <SharedSelections items={data.selections || []} />}
             {tab === 'Plans' && <SharedPlans plans={data.plans || []} />}
           </>
@@ -100,19 +112,25 @@ export default function SharedProjectPage({ token, initialTab = 'Schedule' }) {
       </main>
 
       <footer className="max-w-7xl mx-auto px-5 pb-8 text-xs text-lbl3">
-        This link permits viewing only. Financials, bids, invoices, draws, settings, and owner tools are not included.
+        Schedule comments are the only permitted changes. Financials, bids, invoices, draws, settings, and owner tools are not included.
       </footer>
     </div>
   )
 }
 
-function SharedSchedule({ tasks }) {
+function SharedSchedule({ tasks, notes, token, onNoteAdded }) {
   const [collapsed, setCollapsed] = useState(new Set())
+  const [selectedTask, setSelectedTask] = useState(null)
   const phases = useMemo(
     () => tasks.filter(task => !task.parent_id).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)),
     [tasks],
   )
   const taskById = useMemo(() => new Map(tasks.map(task => [task.id, task])), [tasks])
+  const notesByTask = useMemo(() => {
+    const grouped = new Map()
+    notes.forEach(note => grouped.set(note.task_id, [...(grouped.get(note.task_id) || []), note]))
+    return grouped
+  }, [notes])
   const children = tasks.filter(task => task.parent_id)
   const dated = children.filter(task => task.start_date && task.end_date)
   const projectStart = minDate(dated.map(task => task.start_date)) || new Date()
@@ -151,7 +169,7 @@ function SharedSchedule({ tasks }) {
       <div className="flex items-center justify-between gap-4 mb-3">
         <div>
           <h2 className="text-white font-bold text-xl">Construction schedule</h2>
-          <p className="text-lbl2 text-sm mt-1">Dates use a Monday–Friday work calendar.</p>
+          <p className="text-lbl2 text-sm mt-1">Dates use a Monday–Friday work calendar. Select any task to view or add a note.</p>
         </div>
         <span className="text-lbl3 text-xs hidden sm:block">Scroll horizontally to view the full timeline</span>
       </div>
@@ -180,23 +198,33 @@ function SharedSchedule({ tasks }) {
               const predecessorNames = (task.depends_on || []).map(id => taskById.get(id)?.name?.replace(/^INSPECTION\s*-\s*/i, '')).filter(Boolean)
               const status = STATUS[task.status] || STATUS.not_started
               const isInspection = task.task_type === 'inspection' || /^INSPECTION\s*-/i.test(task.name || '')
+              const taskNotes = notesByTask.get(task.id) || []
               return (
                 <div key={task.id} className="flex" style={{ height: rowHeight, borderBottom: '1px solid rgba(84,84,88,0.18)' }}>
                   <button
                     type="button"
-                    onClick={() => phase && setCollapsed(previous => {
-                      const next = new Set(previous)
-                      next.has(task.id) ? next.delete(task.id) : next.add(task.id)
-                      return next
-                    })}
+                    onClick={() => {
+                      if (!phase) return setSelectedTask(task)
+                      setCollapsed(previous => {
+                        const next = new Set(previous)
+                        next.has(task.id) ? next.delete(task.id) : next.add(task.id)
+                        return next
+                      })
+                    }}
                     className="sticky left-0 z-10 text-left px-4"
-                    style={{ width: listWidth, minWidth: listWidth, background: phase ? '#252527' : '#1c1c1e', border: 0, borderRight: '1px solid rgba(84,84,88,0.35)', cursor: phase ? 'pointer' : 'default', display: 'flex', alignItems: 'center', gap: 10 }}
+                    title={phase ? 'Expand or collapse phase' : `View or add notes for ${task.name}`}
+                    style={{ width: listWidth, minWidth: listWidth, background: phase ? '#252527' : '#1c1c1e', border: 0, borderRight: '1px solid rgba(84,84,88,0.35)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}
                   >
                     <div style={{ flex: 1, minWidth: 0, paddingLeft: phase ? 0 : 18 }}>
                       <div className="truncate" style={{ color: phase ? '#fff' : '#ebebf5', fontSize: phase ? 13 : 12, fontWeight: phase ? 700 : 500 }}>
                         {phase && <span style={{ color, marginRight: 7 }}>{collapsed.has(task.id) ? '▶' : '▼'}</span>}
                         {isInspection && <span style={{ color: '#ff9f0a', marginRight: 5 }}>◆</span>}
                         {(task.name || '').replace(/^INSPECTION\s*-\s*/i, '')}
+                        {!phase && (
+                          <span style={{ color: taskNotes.length ? '#0a84ff' : '#636366', marginLeft: 7, fontSize: 10, whiteSpace: 'nowrap' }}>
+                            Notes {taskNotes.length || '+'}
+                          </span>
+                        )}
                       </div>
                       {!phase && (
                         <div className="truncate text-lbl3" style={{ fontSize: 10 }}>
@@ -225,7 +253,117 @@ function SharedSchedule({ tasks }) {
           </div>
         </div>
       </div>
+      {selectedTask && (
+        <TaskNotesDialog
+          task={selectedTask}
+          notes={notesByTask.get(selectedTask.id) || []}
+          token={token}
+          onNoteAdded={onNoteAdded}
+          onClose={() => setSelectedTask(null)}
+        />
+      )}
     </section>
+  )
+}
+
+function TaskNotesDialog({ task, notes, token, onNoteAdded, onClose }) {
+  const [authorName, setAuthorName] = useState(() => localStorage.getItem('jefferson-shared-commenter-name') || '')
+  const [body, setBody] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  async function submit(event) {
+    event.preventDefault()
+    setSaving(true)
+    setError('')
+    setNotice('')
+    try {
+      const response = await fetch(`/api/shared-schedule-notes?token=${encodeURIComponent(token)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ taskId: task.id, authorName, body }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'The note could not be posted')
+      localStorage.setItem('jefferson-shared-commenter-name', authorName.trim())
+      onNoteAdded(result.note)
+      setBody('')
+      setNotice(result.notification?.sent
+        ? 'Note posted. Josh was notified by text.'
+        : 'Note posted. The text alert could not be delivered yet.')
+    } catch (reason) {
+      setError(reason.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Schedule notes for ${task.name}`}
+      className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center p-0 sm:p-5"
+      style={{ background: 'rgba(0,0,0,0.72)' }}
+      onMouseDown={event => { if (event.target === event.currentTarget) onClose() }}
+    >
+      <div className="w-full max-w-xl overflow-hidden" style={{ background: '#1c1c1e', borderRadius: '16px 16px 0 0', maxHeight: '88vh', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' }}>
+        <div className="flex items-start gap-4 px-5 py-4" style={{ borderBottom: '1px solid rgba(84,84,88,0.35)' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="text-lbl3 uppercase tracking-wider font-semibold" style={{ fontSize: 10 }}>Task notes</div>
+            <h3 className="text-white font-semibold text-base mt-1">{(task.name || '').replace(/^INSPECTION\s*-\s*/i, '')}</h3>
+            <p className="text-lbl3 text-xs mt-1">{formatShortDate(task.start_date, { includeYear: true })} – {formatShortDate(task.end_date, { includeYear: true })}</p>
+          </div>
+          <button type="button" onClick={onClose} className="btn-secondary text-xl px-2 py-1" aria-label="Close task notes">×</button>
+        </div>
+
+        <div className="px-5 py-4 overflow-y-auto" style={{ maxHeight: 'calc(88vh - 86px)' }}>
+          <div className="mb-5">
+            {notes.length ? notes.map(note => (
+              <div key={note.id} className="mb-3 pb-3" style={{ borderBottom: '1px solid rgba(84,84,88,0.22)' }}>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-white text-sm font-semibold">{note.author_name}</span>
+                  <span className="text-lbl3" style={{ fontSize: 10 }}>{new Date(note.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+                </div>
+                <p className="text-lbl2 text-sm mt-1 whitespace-pre-wrap">{note.body}</p>
+              </div>
+            )) : <p className="text-lbl3 text-sm">No notes on this task yet.</p>}
+          </div>
+
+          <form onSubmit={submit}>
+            <label className="block text-lbl3 text-xs mb-1.5" htmlFor={`note-name-${task.id}`}>Your name</label>
+            <input
+              id={`note-name-${task.id}`}
+              className="apple-input w-full text-sm"
+              value={authorName}
+              onChange={event => setAuthorName(event.target.value)}
+              maxLength={80}
+              autoComplete="name"
+              placeholder="Name or company"
+              required
+            />
+            <label className="block text-lbl3 text-xs mt-3 mb-1.5" htmlFor={`note-body-${task.id}`}>Note</label>
+            <textarea
+              id={`note-body-${task.id}`}
+              className="apple-input w-full text-sm"
+              style={{ minHeight: 96, resize: 'vertical' }}
+              value={body}
+              onChange={event => setBody(event.target.value)}
+              maxLength={1000}
+              placeholder="Add a schedule note…"
+              required
+            />
+            <div className="flex items-center justify-between gap-3 mt-2">
+              <span className="text-lbl3" style={{ fontSize: 10 }}>{body.length}/1,000 · Josh receives a text alert</span>
+              <button type="submit" className="btn-primary px-4 py-2 text-sm" disabled={saving}>{saving ? 'Posting…' : 'Post note'}</button>
+            </div>
+            {error && <p className="text-xs mt-3" style={{ color: '#ff453a' }}>{error}</p>}
+            {notice && <p className="text-xs mt-3" style={{ color: '#30d158' }}>{notice}</p>}
+          </form>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -341,4 +479,3 @@ function SharedPlans({ plans }) {
     </section>
   )
 }
-

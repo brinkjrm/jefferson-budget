@@ -5,6 +5,7 @@ import {
   projectServiceClient,
 } from '../server/projectPlans.js'
 import { publicScheduleTask, publicSelection } from '../server/sharedProject.js'
+import { publicScheduleNote } from '../server/scheduleNotes.js'
 
 export const config = { maxDuration: 300 }
 
@@ -14,14 +15,15 @@ export default async function handler(req, res) {
 
   try {
     const client = projectServiceClient()
-    const [projectResult, scheduleResult, selectionsResult, plansResult] = await Promise.all([
+    const [projectResult, scheduleResult, notesResult, selectionsResult, plansResult] = await Promise.all([
       client.from('projects').select('name,address').order('created_at', { ascending: false }).limit(1).maybeSingle(),
       client.from('schedule_tasks').select('*').order('sort_order', { ascending: true }).order('created_at', { ascending: true }),
+      client.from('schedule_task_notes').select('id,task_id,author_name,body,created_at').order('created_at', { ascending: true }).limit(500),
       client.from('selections').select('*').order('sort_order', { ascending: true }),
       client.from('plans').select('id,name,file_url,file_size,created_at').order('name', { ascending: true }),
     ])
 
-    for (const result of [scheduleResult, selectionsResult, plansResult]) {
+    for (const result of [scheduleResult, notesResult, selectionsResult, plansResult]) {
       if (result.error) throw result.error
     }
 
@@ -41,6 +43,7 @@ export default async function handler(req, res) {
     return res.json({
       project: projectResult.error ? { name: '3120 Jefferson Street', address: '' } : projectResult.data,
       schedule: (scheduleResult.data || []).map(publicScheduleTask),
+      scheduleNotes: (notesResult.data || []).map(publicScheduleNote),
       selections: (selectionsResult.data || []).map(publicSelection),
       plans,
       permissions: {

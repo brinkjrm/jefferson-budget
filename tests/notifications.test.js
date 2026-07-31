@@ -34,10 +34,12 @@ test('daily SMS highlights critical actions, invoices, and schedule gates', () =
   })
 
   assert.match(summary, /URGENT: Approve window deposit today/)
+  assert.match(summary, /^Jefferson Construction Manager:/)
   assert.match(summary, /Inbox: 2 new · 2 open actions/)
   assert.match(summary, /Invoices: 2 new · \$15,950/)
   assert.match(summary, /1 inspection ready · 1 overdue/)
   assert.match(summary, /https:\/\/jefferson-budget\.vercel\.app/)
+  assert.match(summary, /Reply STOP to opt out, HELP for help\. Msg & data rates may apply\.$/)
 })
 
 test('daily SMS reports an all-clear day', () => {
@@ -47,4 +49,6 @@ test('daily SMS reports an all-clear day', () => {
   })
 
   assert.match(summary, /No urgent project actions today/)
+  assert.match(summary, /^Jefferson Construction Manager:/)
+  assert.match(summary, /Reply STOP to opt out, HELP for help\. Msg & data rates may apply\.$/)
 })

@@ -60,7 +60,7 @@ export function buildDailySmsSummary({
     return predecessors.length > 0 && predecessors.every(id => taskById.get(id)?.status === 'complete')
   })
 
-  const lines = [`${projectName} brief · ${dateLabel}`]
+  const lines = [`Jefferson Construction Manager: ${projectName} brief · ${dateLabel}`]
   if (criticalActions.length) lines.push(`URGENT: ${compact(criticalActions[0].title, 90)}${criticalActions.length > 1 ? ` (+${criticalActions.length - 1})` : ''}`)
   lines.push(`Inbox: ${newEmails.length} new · ${openActions.length} open action${openActions.length === 1 ? '' : 's'}`)
   if (invoices.length) lines.push(`Invoices: ${invoices.length} new · ${formatMoney(newInvoiceTotal)}`)
@@ -72,7 +72,9 @@ export function buildDailySmsSummary({
     lines.push('No urgent project actions today.')
   }
   if (dashboardUrl) lines.push(dashboardUrl.replace(/\/$/, ''))
-  return compact(lines.join('\n'), 1200)
+  const complianceFooter = 'Reply STOP to opt out, HELP for help. Msg & data rates may apply.'
+  const content = compact(lines.join('\n'), 1200 - complianceFooter.length - 1)
+  return `${content}\n${complianceFooter}`
 }
 
 function localDateString(date, timezone) {

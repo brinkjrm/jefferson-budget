@@ -39,6 +39,16 @@ export async function verifyPrivatePlanBucket(client) {
   return result.data
 }
 
+export async function securePlanBucket(client) {
+  const result = await client.storage.updateBucket(PLAN_BUCKET, {
+    public: false,
+    allowedMimeTypes: ['application/pdf'],
+    fileSizeLimit: 50 * 1024 * 1024,
+  })
+  if (result.error) throw result.error
+  return verifyPrivatePlanBucket(client)
+}
+
 export async function preparePlanUpload(client, { filename, prefix }) {
   await verifyPrivatePlanBucket(client)
   const path = safePlanPath(filename, prefix)

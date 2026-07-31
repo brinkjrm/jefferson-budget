@@ -28,6 +28,7 @@ const displayNames = {
 }
 
 const filenames = (await readdir(sourceDir)).filter(name => name.toLowerCase().endsWith('.pdf')).sort()
+await api({ action: 'secureBucket' })
 for (const filename of filenames) {
   const localPath = resolve(sourceDir, filename)
   const fileStat = await stat(localPath)

@@ -1,4 +1,4 @@
-import { finalizePlanUpload, preparePlanUpload, projectServiceClient } from '../server/projectPlans.js'
+import { finalizePlanUpload, preparePlanUpload, projectServiceClient, securePlanBucket } from '../server/projectPlans.js'
 
 export const config = { maxDuration: 300 }
 
@@ -10,6 +10,10 @@ export default async function handler(req, res) {
 
   try {
     const client = projectServiceClient()
+    if (req.body?.action === 'secureBucket') {
+      const bucket = await securePlanBucket(client)
+      return res.json({ bucket: bucket.id, private: bucket.public === false })
+    }
     if (req.body?.action === 'prepareUpload') {
       return res.json(await preparePlanUpload(client, {
         filename: req.body.filename,

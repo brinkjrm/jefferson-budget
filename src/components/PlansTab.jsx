@@ -1,6 +1,5 @@
-import React, { useState, useRef } from 'react'
-import { useProject, useProjectCollection } from '../context/ProjectContext.jsx'
-import { uploadPlan } from '../lib/supabase.js'
+import React, { useEffect, useState, useRef } from 'react'
+import { supabase } from '../lib/supabase.js'
 
 function fmtSize(bytes) {
   if (!bytes) return ''
@@ -14,8 +13,12 @@ function fmtDate(iso) {
 }
 
 export default function PlansTab() {
-  const { createEntity, updateEntity, removeEntity } = useProject()
-  const [plans, , loading]            = useProjectCollection('plans')
+  const [plans,      setPlans]       = useState([])
+  const [loading,    setLoading]     = useState(true)
+  const [accessCode, setAccessCode]  = useState(() => sessionStorage.getItem('jefferson-plan-access') || '')
+  const [codeInput,  setCodeInput]   = useState(() => sessionStorage.getItem('jefferson-plan-access') || '')
+  const [unlocked,   setUnlocked]    = useState(false)
+  const [unlockError, setUnlockError] = useState('')
   const [selected,    setSelected]    = useState(null)
   const [uploading,   setUploading]   = useState(false)
   const [dragging,    setDragging]    = useState(false)
@@ -27,6 +30,58 @@ export default function PlansTab() {
   const [renameVal,   setRenameVal]   = useState('')
   const fileRef = useRef()
 
+  useEffect(() => {
+    if (accessCode) unlock(accessCode)
+    else setLoading(false)
+  }, [])
+
+  async function planRequest(path = '', options = {}, code = accessCode) {
+    const response = await fetch(`/api/project-plans${path}`, {
+      ...options,
+      headers: {
+        'x-project-access-code': code,
+        ...(options.body ? { 'content-type': 'application/json' } : {}),
+        ...(options.headers || {}),
+      },
+    })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || 'Plan request failed')
+    return data
+  }
+
+  async function unlock(code = codeInput) {
+    const clean = code.trim()
+    if (!clean) return
+    setLoading(true)
+    setUnlockError('')
+    try {
+      const data = await planRequest('', {}, clean)
+      sessionStorage.setItem('jefferson-plan-access', clean)
+      setAccessCode(clean)
+      setCodeInput(clean)
+      setPlans(data.plans || [])
+      setUnlocked(true)
+    } catch (error) {
+      sessionStorage.removeItem('jefferson-plan-access')
+      setUnlockError(error.message)
+      setUnlocked(false)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function selectPlan(plan) {
+    setSelected({ ...plan, file_url: '' })
+    setAnswer(null)
+    setQuestion('')
+    try {
+      const data = await planRequest(`?id=${encodeURIComponent(plan.id)}`)
+      setSelected(current => current?.id === plan.id ? { ...current, file_url: data.url } : current)
+    } catch (error) {
+      showToast(`Plan could not be opened: ${error.message}`, 'error')
+    }
+  }
+
   function showToast(msg, type = 'success') {
     setToast({ msg, type })
     setTimeout(() => setToast(null), 3500)
@@ -37,13 +92,31 @@ export default function PlansTab() {
     if (!pdf) { showToast('Please drop a PDF file', 'error'); return }
     setUploading(true)
     try {
-      const { publicUrl } = await uploadPlan(pdf)
-      const name = pdf.name.replace(/\.pdf$/i, '').replace(/[-_]/g, ' ')
-      const data = await createEntity('plans', {
-        name,
-        file_url: publicUrl,
-        file_size: pdf.size,
+      const prepared = await planRequest('', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'prepareUpload', filename: pdf.name, size: pdf.size }),
       })
+      const uploaded = await supabase.storage.from('plan-pdfs').uploadToSignedUrl(
+        prepared.path,
+        prepared.token,
+        pdf,
+        { contentType: 'application/pdf' },
+      )
+      if (uploaded.error) throw uploaded.error
+      const name = pdf.name.replace(/\.pdf$/i, '').replace(/[-_]/g, ' ')
+      const result = await planRequest('', {
+        method: 'POST',
+        body: JSON.stringify({
+          action: 'finalizeUpload',
+          path: prepared.path,
+          name,
+          size: pdf.size,
+        }),
+      })
+      const data = result.plan
+      setPlans(previous => [data, ...previous.filter(plan => plan.id !== data.id)])
+      const signed = await planRequest(`?id=${encodeURIComponent(data.id)}`)
+      data.file_url = signed.url
       setSelected(data)
       setAnswer(null)
       showToast('Plan uploaded!')
@@ -56,7 +129,8 @@ export default function PlansTab() {
 
   async function deletePlan(plan) {
     if (!confirm(`Delete "${plan.name}"?`)) return
-    await removeEntity('plans', plan.id)
+    await planRequest('', { method: 'DELETE', body: JSON.stringify({ id: plan.id }) })
+    setPlans(previous => previous.filter(item => item.id !== plan.id))
     if (selected?.id === plan.id) { setSelected(null); setAnswer(null) }
     showToast('Deleted')
   }
@@ -64,7 +138,8 @@ export default function PlansTab() {
   async function saveName(plan) {
     const name = renameVal.trim()
     if (!name) return setRenamingId(null)
-    await updateEntity('plans', plan.id, { name })
+    await planRequest('', { method: 'PATCH', body: JSON.stringify({ id: plan.id, name }) })
+    setPlans(previous => previous.map(item => item.id === plan.id ? { ...item, name } : item))
     if (selected?.id === plan.id) setSelected(p => ({ ...p, name }))
     setRenamingId(null)
   }
@@ -89,7 +164,23 @@ export default function PlansTab() {
     }
   }
 
-  if (loading) return <div className="text-center py-24 text-lbl3 text-sm">Loading…</div>
+  if (loading) return <div className="text-center py-24 text-lbl3 text-sm">Opening secure plan library…</div>
+
+  if (!unlocked) return (
+    <div className="max-w-md mx-auto py-14">
+      <div className="apple-card p-7">
+        <div className="text-3xl mb-4">🔒</div>
+        <h2 className="text-white font-bold text-xl">Private plan library</h2>
+        <p className="text-lbl2 text-sm mt-2 mb-5">Enter the project access code to view architectural, structural, and permit documents.</p>
+        <form onSubmit={event => { event.preventDefault(); unlock() }}>
+          <input type="password" value={codeInput} onChange={event => setCodeInput(event.target.value)}
+            className="apple-input w-full" placeholder="Project access code" autoComplete="current-password" autoFocus />
+          {unlockError && <p className="text-xs mt-2" style={{ color: '#ff453a' }}>{unlockError}</p>}
+          <button type="submit" className="btn-primary w-full py-2.5 mt-4 text-sm">Unlock plans</button>
+        </form>
+      </div>
+    </div>
+  )
 
   return (
     <div>
@@ -142,7 +233,7 @@ export default function PlansTab() {
             ) : plans.map(plan => (
               <div
                 key={plan.id}
-                onClick={() => { setSelected(plan); setAnswer(null); setQuestion('') }}
+                onClick={() => selectPlan(plan)}
                 style={{
                   padding: '10px 14px',
                   cursor: 'pointer',
@@ -204,19 +295,19 @@ export default function PlansTab() {
               <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
                 <span style={{ fontSize: 20 }}>📐</span>
                 <span style={{ fontSize: 16, fontWeight: 700, color: '#fff' }}>{selected.name}</span>
-                <a href={selected.file_url} target="_blank" rel="noreferrer"
+                {selected.file_url && <a href={selected.file_url} target="_blank" rel="noreferrer"
                   style={{ fontSize: 11, color: '#0a84ff', fontWeight: 600, marginLeft: 'auto' }}>
                   Open in new tab ↗
-                </a>
+                </a>}
               </div>
 
               {/* PDF iframe */}
               <div className="apple-card overflow-hidden" style={{ marginBottom: 12 }}>
-                <iframe
+                {selected.file_url ? <iframe
                   src={selected.file_url}
                   title={selected.name}
                   style={{ width: '100%', height: '65vh', border: 'none', display: 'block' }}
-                />
+                /> : <div className="text-center py-24 text-lbl3 text-sm">Creating secure preview…</div>}
               </div>
 
               {/* Q&A */}
@@ -235,9 +326,9 @@ export default function PlansTab() {
                   />
                   <button
                     onClick={askQuestion}
-                    disabled={asking || !question.trim()}
+                    disabled={asking || !question.trim() || !selected.file_url}
                     className="btn-primary text-xs px-4"
-                    style={{ opacity: asking || !question.trim() ? 0.5 : 1 }}
+                    style={{ opacity: asking || !question.trim() || !selected.file_url ? 0.5 : 1 }}
                   >
                     {asking ? '…' : 'Ask'}
                   </button>

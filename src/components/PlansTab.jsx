@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
+import { PROJECT_ACCESS_STORAGE_KEY } from './OwnerAccessGate.jsx'
 
 function fmtSize(bytes) {
   if (!bytes) return ''
@@ -16,8 +17,8 @@ export default function PlansTab() {
   const [plans,      setPlans]       = useState([])
   const [shareUrl,   setShareUrl]    = useState('')
   const [loading,    setLoading]     = useState(true)
-  const [accessCode, setAccessCode]  = useState(() => sessionStorage.getItem('jefferson-plan-access') || '')
-  const [codeInput,  setCodeInput]   = useState(() => sessionStorage.getItem('jefferson-plan-access') || '')
+  const [accessCode, setAccessCode]  = useState(() => sessionStorage.getItem(PROJECT_ACCESS_STORAGE_KEY) || sessionStorage.getItem('jefferson-plan-access') || '')
+  const [codeInput,  setCodeInput]   = useState(() => sessionStorage.getItem(PROJECT_ACCESS_STORAGE_KEY) || sessionStorage.getItem('jefferson-plan-access') || '')
   const [unlocked,   setUnlocked]    = useState(false)
   const [unlockError, setUnlockError] = useState('')
   const [selected,    setSelected]    = useState(null)
@@ -57,6 +58,7 @@ export default function PlansTab() {
     setUnlockError('')
     try {
       const data = await planRequest('', {}, clean)
+      sessionStorage.setItem(PROJECT_ACCESS_STORAGE_KEY, clean)
       sessionStorage.setItem('jefferson-plan-access', clean)
       setAccessCode(clean)
       setCodeInput(clean)
@@ -64,6 +66,7 @@ export default function PlansTab() {
       setShareUrl(data.share_url || '')
       setUnlocked(true)
     } catch (error) {
+      sessionStorage.removeItem(PROJECT_ACCESS_STORAGE_KEY)
       sessionStorage.removeItem('jefferson-plan-access')
       setUnlockError(error.message)
       setUnlocked(false)
@@ -208,7 +211,7 @@ export default function PlansTab() {
       <div className="flex items-center justify-between gap-4 mb-4">
         <div>
           <h2 className="text-white font-bold text-xl">Project plans</h2>
-          <p className="text-lbl2 text-sm mt-1">Anyone with the shared link can view and download every plan, but cannot make changes.</p>
+          <p className="text-lbl2 text-sm mt-1">Anyone with the shared link can view the schedule, selections, and plans, but cannot make changes or see owner-only areas.</p>
         </div>
         <button
           type="button"
@@ -216,7 +219,7 @@ export default function PlansTab() {
           onClick={copyShareLink}
           disabled={!shareUrl}
         >
-          Copy view-only share link
+          Copy subcontractor link
         </button>
       </div>
 

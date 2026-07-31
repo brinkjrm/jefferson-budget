@@ -4,7 +4,7 @@ import {
   hasProjectPlanAccess,
   preparePlanUpload,
   privatePlanPath,
-  projectPlanShareToken,
+  projectShareToken,
   projectServiceClient,
 } from '../server/projectPlans.js'
 
@@ -29,7 +29,7 @@ export default async function handler(req, res) {
       const appUrl = (process.env.PUBLIC_APP_URL || 'https://jefferson-budget.vercel.app').replace(/\/$/, '')
       return res.json({
         plans: list.data || [],
-        share_url: `${appUrl}/shared-plans/${projectPlanShareToken()}`,
+        share_url: `${appUrl}/shared-project/${projectShareToken()}`,
       })
     }
 

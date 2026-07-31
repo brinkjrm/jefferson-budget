@@ -2,8 +2,7 @@ import React, { lazy, Suspense, useState } from 'react'
 import { useProject } from './context/ProjectContext.jsx'
 import ChatPanel from './components/ChatPanel.jsx'
 import ExecutiveDashboard from './components/ExecutiveDashboard.jsx'
-import LegalPage from './components/LegalPage.jsx'
-import SharedPlansPage from './components/SharedPlansPage.jsx'
+import { PROJECT_ACCESS_STORAGE_KEY } from './components/OwnerAccessGate.jsx'
 
 const BudgetTab = lazy(() => import('./components/BudgetTab.jsx'))
 const PrepaidTab = lazy(() => import('./components/PrepaidTab.jsx'))
@@ -28,14 +27,27 @@ const TABS = [
 
 export default function App() {
   const [tab, setTab] = useState('Overview')
+  const [shareNotice, setShareNotice] = useState('')
   const { model, connection, setCollection, supabase } = useProject()
   const settings = model.settings
-  const legalPage = window.location.pathname.replace(/\/$/, '')
-  const sharedPlansMatch = window.location.pathname.match(/^\/shared-plans\/([^/]+)\/?$/)
 
-  if (legalPage === '/privacy') return <LegalPage page="privacy" />
-  if (legalPage === '/terms') return <LegalPage page="terms" />
-  if (sharedPlansMatch) return <SharedPlansPage token={decodeURIComponent(sharedPlansMatch[1])} />
+  async function copySharedPortal() {
+    try {
+      const response = await fetch('/api/project-plans', {
+        headers: {
+          'x-project-access-code': sessionStorage.getItem(PROJECT_ACCESS_STORAGE_KEY) || '',
+          accept: 'application/json',
+        },
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Share link unavailable')
+      await navigator.clipboard.writeText(data.share_url)
+      setShareNotice('Subcontractor link copied')
+    } catch (error) {
+      setShareNotice(error.message)
+    }
+    window.setTimeout(() => setShareNotice(''), 3500)
+  }
 
   async function saveSettings(newSettings) {
     const safe = { ...newSettings, borrower: 'Josh Meyer' }
@@ -59,6 +71,9 @@ export default function App() {
               <p className="text-lbl2 text-xs tracking-wide">Construction Manager</p>
             </div>
             <div className="flex items-center gap-2">
+              <button type="button" onClick={copySharedPortal} className="btn-secondary px-3 py-1.5 text-xs" title="Copy the read-only Schedule, Selections, and Plans link">
+                Share portal
+              </button>
               <span className="w-1.5 h-1.5 rounded-full"
                 style={{ background: connection === 'connecting' ? '#ffd60a' : connection === 'live' ? '#30d158' : '#ff9f0a' }} />
               <span className="text-lbl3 text-xs">
@@ -82,6 +97,11 @@ export default function App() {
 
       {/* ── Content ── */}
       <main className="max-w-6xl mx-auto px-5 py-6">
+        {shareNotice && (
+          <div className="mb-4 rounded-lg px-4 py-3 text-sm" style={{ color: '#30d158', background: 'rgba(48,209,88,0.10)' }}>
+            {shareNotice}
+          </div>
+        )}
         <Suspense fallback={<div className="text-center py-24 text-lbl3 text-sm">Opening view…</div>}>
           {tab === 'Overview'      && <ExecutiveDashboard onNavigate={setTab} />}
           {tab === 'Budget'        && <BudgetTab settings={settings} />}

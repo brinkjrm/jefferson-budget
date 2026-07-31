@@ -8,6 +8,7 @@
   "rewrites": [
     { "source": "/privacy", "destination": "/index.html" },
     { "source": "/terms", "destination": "/index.html" },
+    { "source": "/shared-project/:token", "destination": "/index.html" },
     { "source": "/shared-plans/:token", "destination": "/index.html" }
   ]
 }

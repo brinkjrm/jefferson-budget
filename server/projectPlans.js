@@ -10,7 +10,7 @@ export function projectServiceClient() {
   return createClient(url, key, { auth: { persistSession: false } })
 }
 
-export function hasProjectPlanAccess(req) {
+export function hasProjectAccess(req) {
   const expected = process.env.PROJECT_ACCESS_CODE || ''
   const provided = String(req.headers['x-project-access-code'] || '')
   if (!expected || !provided) return false
@@ -19,20 +19,26 @@ export function hasProjectPlanAccess(req) {
   return expectedBuffer.length === providedBuffer.length && timingSafeEqual(expectedBuffer, providedBuffer)
 }
 
-export function projectPlanShareToken() {
+export const hasProjectPlanAccess = hasProjectAccess
+
+export function projectShareToken() {
   const accessCode = process.env.PROJECT_ACCESS_CODE || ''
   if (!accessCode) return ''
   return createHmac('sha256', accessCode).update('jefferson-public-plan-share-v1').digest('base64url')
 }
 
-export function hasProjectPlanShareAccess(value) {
-  const expected = projectPlanShareToken()
+export const projectPlanShareToken = projectShareToken
+
+export function hasProjectShareAccess(value) {
+  const expected = projectShareToken()
   const provided = String(value || '')
   if (!expected || !provided) return false
   const expectedBuffer = Buffer.from(expected)
   const providedBuffer = Buffer.from(provided)
   return expectedBuffer.length === providedBuffer.length && timingSafeEqual(expectedBuffer, providedBuffer)
 }
+
+export const hasProjectPlanShareAccess = hasProjectShareAccess
 
 export function privatePlanPath(value = '') {
   return String(value).replace(/^private:/, '').replace(/^\/+/, '')

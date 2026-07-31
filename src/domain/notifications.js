@@ -14,11 +14,16 @@ const IMPORTANT_TERMS = ['due', 'approve', 'approval', 'confirm', 'required', 'd
 const ACTION_TERMS = ['please', 'need', 'required', 'approve', 'confirm', 'review', 'sign', 'pay', 'schedule', 'respond']
 const PROJECT_EMAIL = 'josh@3120jeffersonst.com'
 const TRADE_KEYWORDS = [
+  ['Surveying', ['land surveying', 'land survey', 'surveyor', 'surveying']],
+  ['Architecture / Design', ['architecture', 'architectural', 'architect']],
+  ['Structural Engineering', ['structural engineering', 'structural engineer']],
+  ['Geotechnical', ['geotechnical', 'soils engineer', 'soil report']],
   ['General Contractor', ['general contractor', 'construction management']],
+  ['Masonry', ['masonry', 'mason']],
   ['Windows & Doors', ['window', 'windows', 'exterior door']],
   ['Electrical', ['electric', 'electrical']],
   ['Plumbing', ['plumb', 'plumbing']],
-  ['HVAC', ['hvac', 'mechanical', 'heat pump']],
+  ['HVAC', ['hvac', 'heating and cooling', 'heat pump']],
   ['Insulation', ['insulation', 'spray foam']],
   ['Drywall', ['drywall', 'gypsum']],
   ['Flooring', ['flooring', 'hardwood']],
@@ -30,13 +35,15 @@ const TRADE_KEYWORDS = [
   ['Landscaping', ['landscap', 'irrigation']],
   ['Demolition', ['demolition', 'abatement']],
   ['Roofing', ['roofing', 'roofer']],
-  ['Framing', ['framing', 'framer', 'lumber']],
+  ['Framing', ['framing', 'framer']],
+  ['Lumber Supplier', ['lumber package', 'lumber estimate', 'lumber supplier']],
   ['Siding', ['siding', 'cladding']],
   ['Gutters', ['gutter', 'downspout']],
 ]
 
 export function classifyProjectEmailHeuristically({ subject = '', from = '', body = '', attachments = [] } = {}) {
-  const sourceText = `${subject}\n${from}\n${body}\n${attachments.map(item => item.filename || '').join(' ')}`
+  const attachmentText = attachments.map(item => item.filename || '').join(' ')
+  const sourceText = `${subject}\n${from}\n${body}\n${attachmentText}`
   const text = sourceText.toLowerCase()
   const category = Object.entries(CATEGORY_KEYWORDS).find(([, terms]) => terms.some(term => text.includes(term)))?.[0] || 'general'
   const urgency = CRITICAL_TERMS.some(term => text.includes(term))
@@ -44,9 +51,10 @@ export function classifyProjectEmailHeuristically({ subject = '', from = '', bod
     : IMPORTANT_TERMS.some(term => text.includes(term)) ? 'important' : 'routine'
   const requiresAction = category === 'bid' || category === 'invoice' || category === 'change_order' || ACTION_TERMS.some(term => text.includes(term))
   const amountMatch = text.match(/\$\s?([\d,]+(?:\.\d{2})?)/)
-  const contact = extractProjectContact({ from, body, text })
+  const primaryText = `${subject}\n${attachmentText}`.toLowerCase()
+  const trade = inferTrade(primaryText) || inferTrade(text)
+  const contact = extractProjectContact({ subject, from, body, attachments, trade })
   const bidAmount = findBidTotal(sourceText)
-  const trade = inferTrade(text)
 
   return {
     category,
@@ -71,22 +79,91 @@ export function classifyProjectEmailHeuristically({ subject = '', from = '', bod
   }
 }
 
-export function extractProjectContact({ from = '', body = '', text = `${from}\n${body}`.toLowerCase() } = {}) {
-  const forwarded = String(body).match(/(?:^|\n)\s*from:\s*(?:"?([^<\n]+?)"?\s*)?<([^>\s]+@[^>\s]+)>/im)
-  const direct = String(from).match(/^\s*"?([^"<]+?)"?\s*<([^>\s]+@[^>\s]+)>/)
+export function extractProjectContact({ subject = '', from = '', body = '', attachments = [], trade = null } = {}) {
+  const source = String(body)
+  const candidates = forwardedSenderCandidates(source)
+  const direct = senderCandidate(from, 0)
+  if (direct) candidates.push(direct)
   const allEmails = String(`${body}\n${from}`).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || []
-  const email = (forwarded?.[2] || direct?.[2] || allEmails.find(value => value.toLowerCase() !== PROJECT_EMAIL) || '').trim()
-  const displayName = (forwarded?.[1] || direct?.[1] || '').replace(/^from:\s*/i, '').replaceAll('"', '').trim()
-  const phone = String(body).match(/(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}/)?.[0]?.trim() || null
-  const companyLine = String(body).split(/\r?\n/).map(line => line.trim()).find(line =>
+  allEmails.forEach((email, index) => candidates.push({ name: '', email, index: candidates.length + index }))
+  const attachmentText = attachments.map(item => item.filename || '').join(' ')
+  const selected = selectContactCandidate(candidates, `${subject} ${attachmentText}`)
+  const email = selected?.email || ''
+  const displayName = selected?.name || ''
+  const phone = phoneNearEmail(body, email)
+  const companyLine = String(body).split(/\r?\n/).map(line => line.replace(/^\s*>+\s*/, '').trim()).find(line =>
     line.length > 2
     && line.length < 90
-    && /\b(?:llc|inc\.?|corp\.?|company|construction|builders?|electric|plumbing|roofing|concrete|landscap|cabinet|design)\b/i.test(line)
+    && /\b(?:llc|inc\.?|corp\.?|company|construction|builders?|roofing|land consultants|carpentry|lumber|masonry|design)\b/i.test(line)
     && !line.includes('@'),
   )
-  const company = companyLine?.replace(/^(?:company|business):\s*/i, '').trim() || null
+  const company = knownCompanyForEmail(email) || companyLine?.replace(/^(?:company|business):\s*/i, '').trim() || null
   const name = displayName || company || (email ? email.split('@')[0].replace(/[._-]+/g, ' ') : null)
-  return { name: name || null, company, email: email || null, phone, trade: inferTrade(text) }
+  return { name: name || null, company, email: email || null, phone, trade }
+}
+
+function forwardedSenderCandidates(body) {
+  const parts = String(body).split(/\bfrom:\s*/i).slice(1)
+  return parts.map((part, index) => {
+    const header = part.slice(0, 240)
+    const email = header.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] || ''
+    const beforeEmail = email ? header.slice(0, header.toLowerCase().indexOf(email.toLowerCase())) : header
+    const name = beforeEmail.replace(/[<>"\n\r]/g, ' ').replace(/^\s*>+\s*/, '').replace(/\s+/g, ' ').trim()
+    return email ? { name: /^[\w.+-]+@/i.test(name) ? '' : name, email, index } : null
+  }).filter(Boolean)
+}
+
+function senderCandidate(value, index) {
+  const email = String(value).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0]
+  if (!email) return null
+  const name = String(value).slice(0, String(value).toLowerCase().indexOf(email.toLowerCase())).replace(/[<>"\n\r]/g, ' ').trim()
+  return { name, email, index }
+}
+
+function selectContactCandidate(candidates, hintText = '') {
+  const normalizedHints = hintText.toLowerCase()
+  const unique = new Map()
+  candidates.forEach(candidate => {
+    const email = candidate.email.toLowerCase().replace(/^mailto:/, '')
+    if ([PROJECT_EMAIL, 'meyerjr1@mac.com'].includes(email)) return
+    if (!unique.has(email)) unique.set(email, { ...candidate, email })
+  })
+  const scored = [...unique.values()].map(candidate => {
+    const email = candidate.email
+    const domain = email.split('@')[1] || ''
+    let score = candidate.index * 0.05
+    if (normalizedHints.includes('land-survey') || normalizedHints.includes('land survey')) score += domain.includes('gillianslc') ? 80 : 0
+    if (normalizedHints.includes('root-architecture') || normalizedHints.includes('root architecture')) score += domain.includes('root-ad') ? 80 : 0
+    if (normalizedHints.includes('greenpoint')) score += domain.includes('greenpointroofing') ? 80 : 0
+    if (normalizedHints.includes('lumber')) score += domain.includes('countylinelumber') ? 80 : 0
+    if (normalizedHints.includes('insulation')) score += domain.includes('installed.net') ? 50 : 0
+    if (normalizedHints.includes('framing')) score += /construction|carpentry/.test(email) ? 45 : 0
+    if (normalizedHints.includes('masonry')) score += email.includes('masonry') ? 80 : 0
+    if (domain.includes('root-ad')) score -= 15
+    if (/service|support|desk|noreply/.test(email)) score -= 30
+    return { ...candidate, score }
+  })
+  return scored.sort((a, b) => b.score - a.score)[0] || null
+}
+
+function knownCompanyForEmail(email = '') {
+  const value = email.toLowerCase()
+  if (value.includes('greenpointroofing')) return 'GreenPoint Roofing'
+  if (value.includes('countylinelumber')) return 'County Line Lumber'
+  if (value.includes('gillianslc')) return 'Gillians Land Consultants'
+  if (value.includes('apex-engineers')) return 'Apex Engineers'
+  if (value.includes('root-ad')) return 'ROOT Architecture and Development'
+  if (value.includes('fippscarpentry')) return 'Fipps Carpentry'
+  if (value.includes('constructionnextgen')) return 'NextGen Construction'
+  if (value.includes('carrizalez') && value.includes('masonry')) return 'Carrizalez Masonry'
+  return null
+}
+
+function phoneNearEmail(body, email) {
+  const value = String(body)
+  const emailIndex = email ? value.toLowerCase().indexOf(email.toLowerCase()) : -1
+  const nearby = emailIndex >= 0 ? value.slice(Math.max(0, emailIndex - 300), emailIndex + 1200) : value
+  return nearby.match(/(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}/)?.[0]?.trim() || null
 }
 
 function inferTrade(text = '') {

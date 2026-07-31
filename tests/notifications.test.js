@@ -37,6 +37,24 @@ Proposal total: $24,750.00`,
   assert.equal(result.bid.totalAmount, 24750)
 })
 
+test('forwarded bid chooses the vendor represented by the attachment', () => {
+  const result = classifyProjectEmailHeuristically({
+    subject: 'Fwd: Fee Proposal Request for 3120 Jefferson',
+    from: '"Josh Meyer" <meyerjr1@mac.com>',
+    body: `> Begin forwarded message:
+> From: Zeke Freeman <zfreeman@root-ad.com>
+> From: Rob Harris <rharris@gillianslc.com>
+> See attached proposal.
+> Main: 303-972-6640`,
+    attachments: [{ filename: '3120-Jefferson-St-Land-Surveying-Proposal.pdf' }],
+  })
+
+  assert.equal(result.contact.email, 'rharris@gillianslc.com')
+  assert.equal(result.contact.company, 'Gillians Land Consultants')
+  assert.equal(result.contact.phone, '303-972-6640')
+  assert.equal(result.contact.trade, 'Surveying')
+})
+
 test('daily SMS highlights critical actions, invoices, and schedule gates', () => {
   const summary = buildDailySmsSummary({
     projectName: 'Jefferson',

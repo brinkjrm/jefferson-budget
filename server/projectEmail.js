@@ -43,10 +43,6 @@ export async function syncProjectInbox({ supabase, lookbackDays = 3, maxMessages
         }
         const body = plainTextBody(parsed)
         const messageId = parsed.messageId || fallbackMessageId(parsed, body)
-        const existing = await supabase.from('project_emails').select('id').eq('message_id', messageId).maybeSingle()
-        if (existing.error) throw existing.error
-        if (existing.data) continue
-
         const attachmentMetadata = (parsed.attachments || []).map(attachment => ({
           filename: attachment.filename || 'attachment',
           mimeType: attachment.contentType || 'application/octet-stream',
@@ -58,6 +54,35 @@ export async function syncProjectInbox({ supabase, lookbackDays = 3, maxMessages
           body,
           attachments: parsed.attachments || [],
         })
+        const existing = await supabase.from('project_emails').select('*').eq('message_id', messageId).maybeSingle()
+        if (existing.error) throw existing.error
+        if (existing.data) {
+          const emailUpdate = await supabase.from('project_emails').update({
+            summary: classification.summary,
+            category: classification.category,
+            urgency: classification.urgency,
+            requires_action: classification.requiresAction,
+            confidence: classification.confidence,
+            classification,
+            updated_at: new Date().toISOString(),
+          }).eq('id', existing.data.id).select().single()
+          if (emailUpdate.error) throw emailUpdate.error
+          if (classification.category === 'bid') {
+            const contractor = await saveContractorFromEmail(supabase, classification.contact)
+            if (contractor) contractorsSaved += 1
+            const bidResult = await saveBidFromEmail(supabase, {
+              projectId: project.id,
+              contractorId: contractor?.id || null,
+              email: emailUpdate.data,
+              messageId,
+              classification,
+              attachments: existing.data.attachments || attachmentMetadata,
+            })
+            if (bidResult.error) errors.push(`Bid: ${bidResult.error.message}`)
+            else if (bidResult.data) bidsSaved += 1
+          }
+          continue
+        }
 
         const emailInsert = await supabase.from('project_emails').insert({
           project_id: project.id,
@@ -135,6 +160,7 @@ export async function syncProjectInbox({ supabase, lookbackDays = 3, maxMessages
         errors.push(error.message)
       }
     }
+    await removeMisidentifiedOwnerContractor(supabase)
   } finally {
     try { await client.logout() } catch {}
   }
@@ -323,10 +349,9 @@ async function saveContractorFromEmail(supabase, contact) {
 async function saveBidFromEmail(supabase, { projectId, contractorId, email, messageId, classification, attachments }) {
   const existing = await supabase.from('bids').select('id').eq('email_message_id', messageId).maybeSingle()
   if (existing.error) return { data: null, error: existing.error }
-  if (existing.data) return { data: null, error: null }
   const bid = classification.bid || {}
   const attachmentNames = attachments.map(item => item.filename).filter(Boolean)
-  return supabase.from('bids').insert({
+  const values = {
     project_id: projectId,
     contractor_id: contractorId,
     trade: bid.trade || classification.contact?.trade || null,
@@ -340,7 +365,21 @@ async function saveBidFromEmail(supabase, { projectId, contractorId, email, mess
     email_date: email.received_at,
     email_message_id: messageId,
     notes: [bid.notes, attachmentNames.length ? `Private project-inbox attachments: ${attachmentNames.join(', ')}` : null].filter(Boolean).join('\n') || null,
-  }).select().single()
+  }
+  if (existing.data) return supabase.from('bids').update(values).eq('id', existing.data.id).select().single()
+  return supabase.from('bids').insert(values).select().single()
+}
+
+async function removeMisidentifiedOwnerContractor(supabase) {
+  const result = await supabase.from('contractors')
+    .select('id')
+    .ilike('email', 'meyerjr1@mac.com')
+    .ilike('name', 'Josh Meyer')
+  if (result.error) return
+  for (const contractor of result.data || []) {
+    const bids = await supabase.from('bids').select('id', { count: 'exact', head: true }).eq('contractor_id', contractor.id)
+    if (!bids.error && bids.count === 0) await supabase.from('contractors').delete().eq('id', contractor.id)
+  }
 }
 
 function parseJsonObject(value) {

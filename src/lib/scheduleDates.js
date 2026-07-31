@@ -102,6 +102,29 @@ export function shiftWorkdayRange(start, end, calendarDelta) {
   }
 }
 
+export function shiftRangeByWorkdays(start, end, workdayDelta) {
+  const duration = Math.max(1, workdayDuration(start, end))
+  const shiftedStart = addWorkdays(start, workdayDelta)
+  return {
+    start_date: toDateString(shiftedStart),
+    end_date: toDateString(addWorkdays(shiftedStart, duration - 1)),
+  }
+}
+
+export function workdayDelta(from, to) {
+  const start = normalizeWorkday(from, 1)
+  const finish = normalizeWorkday(to, 1)
+  if (start.getTime() === finish.getTime()) return 0
+  const direction = start < finish ? 1 : -1
+  let cursor = start
+  let count = 0
+  while ((direction > 0 && cursor < finish) || (direction < 0 && cursor > finish)) {
+    cursor = addWorkdays(cursor, direction)
+    count += direction
+  }
+  return count
+}
+
 export const DEPENDENCY_TYPES = {
   FS: { label: 'Finish to start', shortLabel: 'FS', description: 'The next task starts after this task finishes.' },
   SS: { label: 'Start to start', shortLabel: 'SS', description: 'The next task starts after this task starts.' },
@@ -146,9 +169,19 @@ export function earliestDependencyStart(tasks, dependencyIds = [], successor = n
   return latestFinish ? nextWorkday(latestFinish) : null
 }
 
-export function enforceDependencies(tasks, changedIds = []) {
+export function enforceDependencies(tasks, changedIds = [], baselineTasks = null) {
   const byId = new Map(tasks.map(task => [task.id, { ...task }]))
+  const baseline = baselineTasks ? new Map(baselineTasks.map(task => [task.id, task])) : null
+  const baselineConstraint = new Map()
+  if (baseline) {
+    const baselineValues = [...baseline.values()]
+    for (const task of baselineValues.filter(item => item.parent_id)) {
+      baselineConstraint.set(task.id, earliestDependencyStart(baselineValues, task.depends_on, task))
+    }
+  }
   const queue = [...changedIds]
+  const queued = new Set(queue)
+  const directlyChanged = new Set(changedIds)
   const changed = new Set(changedIds)
 
   for (const id of changedIds) {
@@ -165,17 +198,32 @@ export function enforceDependencies(tasks, changedIds = []) {
 
   while (queue.length) {
     const predecessorId = queue.shift()
+    queued.delete(predecessorId)
     for (const task of byId.values()) {
       if (!task.parent_id || !(task.depends_on || []).includes(predecessorId)) continue
       const earliestStart = earliestDependencyStart([...byId.values()], task.depends_on, task)
       if (!earliestStart) continue
+      const priorStart = task.start_date
+      const priorEnd = task.end_date
+      const originalConstraint = baselineConstraint.get(task.id)
+      const baselineTask = baseline?.get(task.id)
+      const constraintMovedLater = originalConstraint && earliestStart > originalConstraint
+      if (constraintMovedLater && baselineTask && !directlyChanged.has(task.id)) {
+        const shifted = shiftRangeByWorkdays(baselineTask.start_date, baselineTask.end_date, workdayDelta(originalConstraint, earliestStart))
+        task.start_date = shifted.start_date
+        task.end_date = shifted.end_date
+      }
       if (!task.start_date || parseDate(task.start_date) < earliestStart) {
         const duration = Math.max(1, workdayDuration(task.start_date, task.end_date))
         task.start_date = toDateString(earliestStart)
         task.end_date = toDateString(addWorkdays(earliestStart, duration - 1))
-        if (!changed.has(task.id)) {
-          changed.add(task.id)
+      }
+      const taskMoved = task.start_date !== priorStart || task.end_date !== priorEnd
+      if (taskMoved) {
+        changed.add(task.id)
+        if (!queued.has(task.id)) {
           queue.push(task.id)
+          queued.add(task.id)
         }
       }
     }
@@ -294,9 +342,28 @@ export function rollupPhaseDates(tasks) {
   return rolled
 }
 
+export function sortPhaseTasksChronologically(tasks) {
+  const ordered = tasks.map(task => ({ ...task }))
+  for (const phase of ordered.filter(task => !task.parent_id)) {
+    const children = ordered
+      .filter(task => task.parent_id === phase.id)
+      .sort((a, b) => {
+        const startComparison = String(a.start_date || '9999-12-31').localeCompare(String(b.start_date || '9999-12-31'))
+        if (startComparison) return startComparison
+        const endComparison = String(a.end_date || '9999-12-31').localeCompare(String(b.end_date || '9999-12-31'))
+        if (endComparison) return endComparison
+        const orderComparison = (a.sort_order || 0) - (b.sort_order || 0)
+        if (orderComparison) return orderComparison
+        return String(a.name || a.id).localeCompare(String(b.name || b.id))
+      })
+    children.forEach((task, index) => { task.sort_order = index + 1 })
+  }
+  return ordered
+}
+
 export function applyTaskChange(tasks, taskId, patch) {
   const candidate = tasks.map(task => task.id === taskId ? { ...task, ...patch } : { ...task })
-  return rollupPhaseDates(enforceDependencies(candidate, [taskId]).tasks)
+  return rollupPhaseDates(enforceDependencies(candidate, [taskId], tasks).tasks)
 }
 
 export function sameScheduleTask(a, b) {

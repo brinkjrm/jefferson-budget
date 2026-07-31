@@ -14,6 +14,7 @@ import {
   isWorkday,
   removeDependencyLink,
   reverseDependencyLink,
+  sortPhaseTasksChronologically,
   toDateString,
   updateDependencyLink,
   workdayDuration,
@@ -62,6 +63,49 @@ test('moving work later pushes successors without moving unrelated tasks', () =>
     id: 'b', parent_id: 'phase', start_date: '2026-08-13', end_date: '2026-08-14', depends_on: ['a'],
   })
   assert.equal(result.find(item => item.id === 'c').start_date, '2026-08-03')
+})
+
+test('moving a predecessor later preserves spacing through the full dependency chain', () => {
+  const baseline = [
+    { id: 'phase', parent_id: null, name: 'Phase', start_date: '2026-08-03', end_date: '2026-08-17', sort_order: 1, depends_on: [] },
+    { id: 'a', parent_id: 'phase', name: 'A', start_date: '2026-08-03', end_date: '2026-08-05', sort_order: 1, depends_on: [] },
+    { id: 'b', parent_id: 'phase', name: 'B', start_date: '2026-08-10', end_date: '2026-08-11', sort_order: 2, depends_on: ['a'] },
+    { id: 'c', parent_id: 'phase', name: 'C', start_date: '2026-08-14', end_date: '2026-08-17', sort_order: 3, depends_on: ['b'] },
+  ]
+  const candidate = baseline.map(task => task.id === 'a'
+    ? { ...task, start_date: '2026-08-10', end_date: '2026-08-12' }
+    : { ...task })
+  const result = enforceDependencies(candidate, ['a'], baseline).tasks
+
+  assert.deepEqual(
+    result.filter(task => task.parent_id).map(task => [task.id, task.start_date, task.end_date]),
+    [
+      ['a', '2026-08-10', '2026-08-12'],
+      ['b', '2026-08-17', '2026-08-18'],
+      ['c', '2026-08-21', '2026-08-24'],
+    ],
+  )
+  const repeated = enforceDependencies(result, ['a'], baseline).tasks
+  assert.deepEqual(
+    repeated.filter(task => task.parent_id).map(task => [task.id, task.start_date, task.end_date]),
+    result.filter(task => task.parent_id).map(task => [task.id, task.start_date, task.end_date]),
+    're-saving a drag preview must not shift successors twice',
+  )
+})
+
+test('tasks are chronologically sorted within each phase after dates change', () => {
+  const tasks = [
+    { id: 'phase', parent_id: null, name: 'Phase', sort_order: 1 },
+    { id: 'late', parent_id: 'phase', name: 'Late', start_date: '2026-08-20', end_date: '2026-08-21', sort_order: 1 },
+    { id: 'second', parent_id: 'phase', name: 'Second', start_date: '2026-08-03', end_date: '2026-08-05', sort_order: 2 },
+    { id: 'first', parent_id: 'phase', name: 'First', start_date: '2026-08-03', end_date: '2026-08-04', sort_order: 3 },
+  ]
+  const ordered = sortPhaseTasksChronologically(tasks)
+    .filter(task => task.parent_id === 'phase')
+    .sort((a, b) => a.sort_order - b.sort_order)
+
+  assert.deepEqual(ordered.map(task => task.id), ['first', 'second', 'late'])
+  assert.deepEqual(ordered.map(task => task.sort_order), [1, 2, 3])
 })
 
 test('a successor cannot be dated before its selected predecessor finishes', () => {

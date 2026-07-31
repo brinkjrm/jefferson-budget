@@ -24,6 +24,7 @@ import {
   reverseDependencyLink,
   rollupPhaseDates,
   shiftWorkdayRange,
+  sortPhaseTasksChronologically,
   startOfWeek,
   toDateString,
   updateDependencyLink,
@@ -164,8 +165,11 @@ export default function ScheduleTab() {
       return false
     }
 
-    const enforced = enforceDependencies(candidateTasks, changedIds)
-    const rolled = rollupPhaseDates(enforced.tasks)
+    const enforced = enforceDependencies(candidateTasks, changedIds, baselineTasks)
+    const ordered = options.sortChronologically === false
+      ? enforced.tasks
+      : sortPhaseTasksChronologically(enforced.tasks)
+    const rolled = rollupPhaseDates(ordered)
     const changed = changedScheduleRows(baselineTasks, rolled)
     if (!changed.length) {
       tasksRef.current = rolled
@@ -256,7 +260,7 @@ export default function ScheduleTab() {
     const snapshot = undoSnapshot
     setUndoSnapshot(null)
     setSelectedDependency(null)
-    const saved = await persistTasks(snapshot.tasks, snapshot.tasks.map(task => task.id), `Undid: ${snapshot.label}`, tasksRef.current, { recordUndo: false })
+    const saved = await persistTasks(snapshot.tasks, snapshot.tasks.map(task => task.id), `Undid: ${snapshot.label}`, tasksRef.current, { recordUndo: false, sortChronologically: false })
     if (!saved) setUndoSnapshot(snapshot)
   }
 
@@ -404,7 +408,7 @@ export default function ScheduleTab() {
       candidate = candidate.map(task => updates.has(task.id) ? { ...task, ...updates.get(task.id) } : task)
       changedIds.push(...siblings.map(task => task.id))
     }
-    await persistTasks(candidate, changedIds, 'Schedule order updated')
+    await persistTasks(candidate, changedIds, 'Schedule order updated', tasksRef.current, { sortChronologically: false })
   }
 
   async function applyPermitSchedule() {

@@ -51,8 +51,7 @@ export function classifyProjectEmailHeuristically({ subject = '', from = '', bod
     : IMPORTANT_TERMS.some(term => text.includes(term)) ? 'important' : 'routine'
   const requiresAction = category === 'bid' || category === 'invoice' || category === 'change_order' || ACTION_TERMS.some(term => text.includes(term))
   const amountMatch = text.match(/\$\s?([\d,]+(?:\.\d{2})?)/)
-  const primaryText = `${subject}\n${attachmentText}`.toLowerCase()
-  const trade = inferTrade(primaryText) || inferTrade(text)
+  const trade = inferTrade(subject.toLowerCase()) || inferTrade(attachmentText.toLowerCase()) || inferTrade(text)
   const contact = extractProjectContact({ subject, from, body, attachments, trade })
   const bidAmount = findBidTotal(sourceText)
 

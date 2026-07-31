@@ -66,6 +66,17 @@ test('roof and gutter proposals retain the combined trade', () => {
   assert.equal(result.bid.trade, 'Roofing & Gutters')
 })
 
+test('an explicit framing subject wins over a foundation reference in the attachment name', () => {
+  const result = classifyProjectEmailHeuristically({
+    subject: 'Framing Quote/Proposal 3120 Jefferson',
+    body: 'From: Jason <jason@fippscarpentry.com>',
+    attachments: [{ filename: 'Quote-to-include-new-floor-joist-on-existing-foundation.pdf' }],
+  })
+
+  assert.equal(result.contact.trade, 'Framing')
+  assert.equal(result.bid.trade, 'Framing')
+})
+
 test('daily SMS highlights critical actions, invoices, and schedule gates', () => {
   const summary = buildDailySmsSummary({
     projectName: 'Jefferson',

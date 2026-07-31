@@ -3,6 +3,7 @@ import { useProject } from './context/ProjectContext.jsx'
 import ChatPanel from './components/ChatPanel.jsx'
 import ExecutiveDashboard from './components/ExecutiveDashboard.jsx'
 import LegalPage from './components/LegalPage.jsx'
+import SharedPlansPage from './components/SharedPlansPage.jsx'
 
 const BudgetTab = lazy(() => import('./components/BudgetTab.jsx'))
 const PrepaidTab = lazy(() => import('./components/PrepaidTab.jsx'))
@@ -30,9 +31,11 @@ export default function App() {
   const { model, connection, setCollection, supabase } = useProject()
   const settings = model.settings
   const legalPage = window.location.pathname.replace(/\/$/, '')
+  const sharedPlansMatch = window.location.pathname.match(/^\/shared-plans\/([^/]+)\/?$/)
 
   if (legalPage === '/privacy') return <LegalPage page="privacy" />
   if (legalPage === '/terms') return <LegalPage page="terms" />
+  if (sharedPlansMatch) return <SharedPlansPage token={decodeURIComponent(sharedPlansMatch[1])} />
 
   async function saveSettings(newSettings) {
     const safe = { ...newSettings, borrower: 'Josh Meyer' }

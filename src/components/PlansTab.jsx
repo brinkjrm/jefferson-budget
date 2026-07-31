@@ -14,6 +14,7 @@ function fmtDate(iso) {
 
 export default function PlansTab() {
   const [plans,      setPlans]       = useState([])
+  const [shareUrl,   setShareUrl]    = useState('')
   const [loading,    setLoading]     = useState(true)
   const [accessCode, setAccessCode]  = useState(() => sessionStorage.getItem('jefferson-plan-access') || '')
   const [codeInput,  setCodeInput]   = useState(() => sessionStorage.getItem('jefferson-plan-access') || '')
@@ -60,6 +61,7 @@ export default function PlansTab() {
       setAccessCode(clean)
       setCodeInput(clean)
       setPlans(data.plans || [])
+      setShareUrl(data.share_url || '')
       setUnlocked(true)
     } catch (error) {
       sessionStorage.removeItem('jefferson-plan-access')
@@ -85,6 +87,16 @@ export default function PlansTab() {
   function showToast(msg, type = 'success') {
     setToast({ msg, type })
     setTimeout(() => setToast(null), 3500)
+  }
+
+  async function copyShareLink() {
+    if (!shareUrl) return
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      showToast('View-only share link copied')
+    } catch {
+      showToast('Could not copy the link. Please try again.', 'error')
+    }
   }
 
   async function handleFiles(files) {
@@ -189,6 +201,21 @@ export default function PlansTab() {
           {toast.msg}
         </div>
       )}
+
+      <div className="flex items-center justify-between gap-4 mb-4">
+        <div>
+          <h2 className="text-white font-bold text-xl">Project plans</h2>
+          <p className="text-lbl2 text-sm mt-1">Anyone with the shared link can view and download every plan, but cannot make changes.</p>
+        </div>
+        <button
+          type="button"
+          className="btn-primary px-4 py-2.5 text-sm whitespace-nowrap"
+          onClick={copyShareLink}
+          disabled={!shareUrl}
+        >
+          Copy view-only share link
+        </button>
+      </div>
 
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
 

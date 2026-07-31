@@ -713,7 +713,7 @@ export default function ScheduleTab() {
 
         {!isExpanded && <div className="no-print flex items-center gap-3 mb-3 rounded-lg px-3 py-2 text-xs flex-wrap" style={{ background: 'rgba(10,132,255,0.07)', border: '1px solid rgba(10,132,255,0.16)' }}>
           <span style={{ color: '#0a84ff', fontWeight: 700 }}>Quick edit</span>
-          <span className="text-lbl3">Use + Task on any phase to add work</span>
+          <span className="text-lbl3">Use + on any phase to add work</span>
           <span className="text-lbl3">·</span>
           <span className="text-lbl3">Drag a bar to move it</span>
           <span className="text-lbl3">·</span>
@@ -808,13 +808,14 @@ export default function ScheduleTab() {
                             background: 'rgba(10,132,255,0.12)',
                             border: '1px solid rgba(10,132,255,0.28)',
                             borderRadius: 6,
-                            padding: '4px 7px',
-                            fontSize: 10,
+                            width: 24,
+                            height: 24,
+                            fontSize: 16,
+                            lineHeight: 1,
                             fontWeight: 750,
-                            whiteSpace: 'nowrap',
                           }}
                         >
-                          + Task
+                          +
                         </button>
                       )}
                       <button onClick={event => { event.stopPropagation(); deleteTask(task.id) }} style={{ color: '#ff453a', fontSize: 14, width: 18, flexShrink: 0, opacity: hoveredId === task.id ? 1 : 0 }} title="Delete">×</button>

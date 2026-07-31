@@ -15,6 +15,28 @@ test('email fallback identifies invoices and action language', () => {
   assert.equal(result.invoice.amount, 12450)
 })
 
+test('email fallback extracts a forwarded contractor bid and contact details', () => {
+  const result = classifyProjectEmailHeuristically({
+    subject: 'Fwd: Electrical proposal for Jefferson',
+    from: 'Josh Meyer <Josh@3120JeffersonSt.com>',
+    body: `From: Taylor Smith <taylor@example-electric.com>
+Example Electric LLC
+(303) 555-0198
+
+Proposal total: $24,750.00`,
+    attachments: [{ filename: 'Jefferson-electrical-proposal.pdf' }],
+  })
+
+  assert.equal(result.category, 'bid')
+  assert.equal(result.requiresAction, true)
+  assert.equal(result.contact.name, 'Taylor Smith')
+  assert.equal(result.contact.company, 'Example Electric LLC')
+  assert.equal(result.contact.email, 'taylor@example-electric.com')
+  assert.equal(result.contact.phone, '(303) 555-0198')
+  assert.equal(result.contact.trade, 'Electrical')
+  assert.equal(result.bid.totalAmount, 24750)
+})
+
 test('daily SMS highlights critical actions, invoices, and schedule gates', () => {
   const summary = buildDailySmsSummary({
     projectName: 'Jefferson',

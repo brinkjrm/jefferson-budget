@@ -10,6 +10,7 @@ const DrawsTab = lazy(() => import('./components/DrawsTab.jsx'))
 const SettingsTab = lazy(() => import('./components/SettingsTab.jsx'))
 const ScheduleTab = lazy(() => import('./components/ScheduleTab.jsx'))
 const BidsTab = lazy(() => import('./components/BidsTab.jsx'))
+const ContractorsTab = lazy(() => import('./components/ContractorsTab.jsx'))
 const SelectionsTab = lazy(() => import('./components/SelectionsTab.jsx'))
 const PlansTab = lazy(() => import('./components/PlansTab.jsx'))
 
@@ -18,6 +19,7 @@ const TABS = [
   { id: 'Budget',        label: 'Budget'      },
   { id: 'Schedule',      label: 'Schedule'    },
   { id: 'Bids',          label: 'Bids'        },
+  { id: 'Contractors',   label: 'Contractors' },
   { id: 'Selections',    label: 'Selections'  },
   { id: 'Plans',         label: 'Plans'       },
   { id: 'Prepaid Items', label: 'Prepaid'     },
@@ -107,6 +109,7 @@ export default function App() {
           {tab === 'Budget'        && <BudgetTab settings={settings} />}
           {tab === 'Schedule'      && <ScheduleTab />}
           {tab === 'Bids'          && <BidsTab />}
+          {tab === 'Contractors'   && <ContractorsTab />}
           {tab === 'Selections'    && <SelectionsTab />}
           {tab === 'Plans'         && <PlansTab />}
           {tab === 'Prepaid Items' && <PrepaidTab />}

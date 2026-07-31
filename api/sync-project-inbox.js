@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { syncProjectInbox } from '../server/projectEmail.js'
+import { hasProjectAccess } from '../server/projectPlans.js'
 
 export const config = { maxDuration: 300 }
 
@@ -7,8 +8,8 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
   const cronSecret = process.env.CRON_SECRET
-  if (!cronSecret) return res.status(503).json({ error: 'CRON_SECRET is not configured' })
-  if (req.headers.authorization !== `Bearer ${cronSecret}`) return res.status(401).json({ error: 'Unauthorized' })
+  const hasCronAccess = Boolean(cronSecret && req.headers.authorization === `Bearer ${cronSecret}`)
+  if (!hasCronAccess && !hasProjectAccess(req)) return res.status(401).json({ error: 'Unauthorized' })
 
   const supabaseUrl = process.env.SUPABASE_URL || 'https://qxffadumpshyaseayndy.supabase.co'
   const serviceKey = process.env.SUPABASE_SERVICE_KEY
@@ -16,7 +17,8 @@ export default async function handler(req, res) {
 
   try {
     const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } })
-    const result = await syncProjectInbox({ supabase })
+    const lookbackDays = Math.max(1, Math.min(90, Number(req.body?.lookbackDays) || 7))
+    const result = await syncProjectInbox({ supabase, lookbackDays })
     const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString()
     const recentResult = await supabase.from('project_emails')
       .select('id,email_to,attachments,created_at')
@@ -30,6 +32,8 @@ export default async function handler(req, res) {
     return res.json({
       connected: true,
       imported: result.count,
+      contractorsSaved: result.contractorsSaved,
+      bidsSaved: result.bidsSaved,
       skippedUnrelated: result.skippedUnrelated,
       processingErrors: result.errors,
       audit: {

@@ -188,6 +188,7 @@ export default function ScheduleTab() {
       color: task.color || null,
       depends_on: task.depends_on || [],
       dependency_settings: task.dependency_settings || {},
+      needs_contractor_discussion: Boolean(task.needs_contractor_discussion),
       updated_at: new Date().toISOString(),
     }))
     const { error } = await supabase.from('schedule_tasks').upsert(payload)
@@ -208,6 +209,15 @@ export default function ScheduleTab() {
   async function updateTask(id, patch, successText) {
     const candidate = tasksRef.current.map(task => task.id === id ? { ...task, ...patch } : task)
     return persistTasks(candidate, [id], successText)
+  }
+
+  async function toggleContractorDiscussion(task) {
+    const flagged = !task.needs_contractor_discussion
+    return updateTask(
+      task.id,
+      { needs_contractor_discussion: flagged },
+      flagged ? 'Flagged for contractor discussion' : 'Contractor discussion flag cleared',
+    )
   }
 
   async function createDependency(predecessorId, successorId, setting = { type: 'FS', lag: 0 }) {
@@ -461,7 +471,7 @@ export default function ScheduleTab() {
     const { data, error } = await supabase.from('schedule_tasks').insert({
       name: 'New Task', parent_id: parentId, start_date: start, end_date: toDateString(addWorkdays(start, 4)),
       status: 'not_started', sort_order: siblings.reduce((max, task) => Math.max(max, task.sort_order || 0), 0) + 1,
-      depends_on: [],
+      depends_on: [], needs_contractor_discussion: false,
     }).select().single()
     if (error) return setNotice({ type: 'error', text: `Could not add task: ${error.message}` })
     const next = rollupPhaseDates([...tasksRef.current, data])
@@ -514,6 +524,7 @@ export default function ScheduleTab() {
       start_date: task.start_date || '',
       end_date: task.end_date || '',
       status: task.status || 'not_started',
+      needs_contractor_discussion: Boolean(task.needs_contractor_discussion),
       depends_on: task.depends_on || [],
       dependency_settings: task.dependency_settings || {},
     })
@@ -530,6 +541,7 @@ export default function ScheduleTab() {
       start_date: start,
       end_date: end,
       status: editFields.status,
+      needs_contractor_discussion: Boolean(editFields.needs_contractor_discussion),
       depends_on: isPhase ? [] : editFields.depends_on,
       dependency_settings: isPhase ? {} : editFields.dependency_settings,
     }, 'Schedule item saved')
@@ -631,14 +643,14 @@ export default function ScheduleTab() {
   }
 
   function exportCsv() {
-    const header = ['Phase', 'Task', 'Trade', 'Type', 'Start', 'Finish', 'Workdays', 'Predecessors', 'Plan references', 'Notes']
+    const header = ['Phase', 'Task', 'Contractor discussion', 'Trade', 'Type', 'Start', 'Finish', 'Workdays', 'Predecessors', 'Plan references', 'Notes']
     const rows = phases.flatMap(phase => tasks
       .filter(task => task.parent_id === phase.id)
       .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0))
       .map(item => {
         const metadata = getJeffersonTaskMetadata(item.name)
         return [
-          phase.name, item.name.replace(/^INSPECTION - /, ''), metadata.trade,
+          phase.name, item.name.replace(/^INSPECTION - /, ''), item.needs_contractor_discussion ? 'Yes' : 'No', metadata.trade,
           TYPE_MAP[metadata.type]?.label || 'Work', item.start_date, item.end_date,
           workdayDuration(item.start_date, item.end_date),
           (item.depends_on || []).map(id => dependencyText(item, id)).join('; '), metadata.references, metadata.notes,
@@ -712,6 +724,7 @@ export default function ScheduleTab() {
           <Legend color="#bf5af2" label="Procurement" />
           <Legend color="#30d158" label="Complete" />
           <Legend color="#ff453a" label="Blocked" />
+          <span style={{ color: '#ffb340', fontWeight: 750 }}>⚑ <span className="text-lbl3" style={{ fontWeight: 400 }}>Contractor discussion</span></span>
           <DependencyLegend />
         </div>
 
@@ -788,7 +801,10 @@ export default function ScheduleTab() {
                       ) : <span style={{ width: 12, flexShrink: 0 }} />}
                       <span style={{ width: 7, height: 7, borderRadius: metadata.type === 'inspection' ? 1 : '50%', transform: metadata.type === 'inspection' ? 'rotate(45deg)' : undefined, background: metadata.type === 'inspection' ? '#ff9f0a' : phaseColor, flexShrink: 0 }} />
                       <div onClick={() => editingId === task.id ? setEditingId(null) : openEdit(task)} style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: isPhase ? 700 : 500, color: isPhase ? '#fff' : '#ebebf5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.name.replace(/^INSPECTION - /, '')}</div>
+                        <div style={{ fontSize: 13, fontWeight: isPhase ? 700 : 500, color: isPhase ? '#fff' : '#ebebf5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {!isPhase && task.needs_contractor_discussion && <span style={{ color: '#ffb340', marginRight: 6 }} title="Needs contractor discussion">⚑</span>}
+                          {task.name.replace(/^INSPECTION - /, '')}
+                        </div>
                         {!isPhase && <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                           <span style={{ fontSize: 10, color: metadata.type === 'inspection' ? '#ff9f0a' : '#8e8e93', flexShrink: 0 }}>{metadata.trade || 'Unassigned'} · {workdayDuration(task.start_date, task.end_date)}d</span>
                           <span title={predecessors.length ? `Starts after: ${predecessors.join(', ')}` : 'No predecessor'} style={{ fontSize: 10, color: predecessors.length ? '#ffb340' : '#636366', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -800,6 +816,25 @@ export default function ScheduleTab() {
                       {!isPhase && <button onClick={() => openEdit(task)} title="Edit finish date" style={{ width: 62, flexShrink: 0, color: '#ebebf5', fontSize: 10, textAlign: 'left', fontVariantNumeric: 'tabular-nums' }}>{formatShortDate(task.end_date)}</button>}
                       {isPhase && <span style={{ width: 132, flexShrink: 0, color: '#8e8e93', fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>{formatShortDate(task.start_date)} – {formatShortDate(task.end_date)}</span>}
                       <span style={{ color: STATUS_MAP[task.status]?.color || '#8E8E93', fontSize: 9, flexShrink: 0 }}>●</span>
+                      {!isPhase && (
+                        <button
+                          type="button"
+                          onClick={event => { event.stopPropagation(); toggleContractorDiscussion(task) }}
+                          aria-pressed={Boolean(task.needs_contractor_discussion)}
+                          aria-label={`${task.needs_contractor_discussion ? 'Clear' : 'Flag'} contractor discussion for ${task.name}`}
+                          title={task.needs_contractor_discussion ? 'Clear contractor discussion flag' : 'Flag for contractor discussion'}
+                          style={{
+                            color: task.needs_contractor_discussion ? '#ffb340' : '#636366',
+                            fontSize: 16,
+                            lineHeight: 1,
+                            width: 22,
+                            flexShrink: 0,
+                            opacity: task.needs_contractor_discussion ? 1 : hoveredId === task.id ? 0.8 : 0.35,
+                          }}
+                        >
+                          ⚑
+                        </button>
+                      )}
                       {isPhase && (
                         <button
                           type="button"
@@ -1070,6 +1105,32 @@ function EditModal({ task, fields, setFields, tasks, isPhase, onSave, onCancel, 
           <label className="flex items-center gap-2 text-lbl3 text-xs">Start<input type="date" value={fields.start_date} onChange={set('start_date')} disabled={isPhase} className="apple-input text-xs" style={{ width: 140, opacity: isPhase ? 0.55 : 1 }} /></label>
           <label className="flex items-center gap-2 text-lbl3 text-xs">Finish<input type="date" value={fields.end_date} onChange={set('end_date')} disabled={isPhase} className="apple-input text-xs" style={{ width: 140, opacity: isPhase ? 0.55 : 1 }} /></label>
           <select value={fields.status} onChange={set('status')} className="apple-input text-xs" style={{ width: 135 }}>{Object.entries(STATUS_MAP).map(([key, value]) => <option key={key} value={key}>{value.label}</option>)}</select>
+          {!isPhase && (
+            <button
+              type="button"
+              role="switch"
+              aria-checked={Boolean(fields.needs_contractor_discussion)}
+              onClick={() => setFields(previous => ({ ...previous, needs_contractor_discussion: !previous.needs_contractor_discussion }))}
+              className="flex items-center gap-2 text-xs"
+              style={{ color: fields.needs_contractor_discussion ? '#ffb340' : '#8e8e93' }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 34,
+                  height: 20,
+                  borderRadius: 10,
+                  padding: 2,
+                  background: fields.needs_contractor_discussion ? '#ff9f0a' : '#3a3a3c',
+                  display: 'flex',
+                  justifyContent: fields.needs_contractor_discussion ? 'flex-end' : 'flex-start',
+                }}
+              >
+                <span style={{ width: 16, height: 16, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.35)' }} />
+              </span>
+              Needs contractor discussion
+            </button>
+          )}
         </div>
         {isPhase ? <p className="text-lbl3 text-xs">Phase dates roll up automatically from child tasks.</p> : (
           <div>
@@ -1127,7 +1188,7 @@ function PrintableSchedule({ phases, tasks, projectStart, projectEnd }) {
           <table><thead><tr><th>Activity</th><th>Trade</th><th>Start</th><th>Finish</th><th>Days</th><th>Predecessor(s)</th><th>Plan Ref.</th></tr></thead>
             <tbody>{tasks.filter(task => task.parent_id === phase.id).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map(item => {
               const metadata = getJeffersonTaskMetadata(item.name)
-              return <tr key={item.id} className={metadata.type === 'inspection' ? 'inspection-row' : ''}><td>{item.name.replace(/^INSPECTION - /, '')}{metadata.type === 'inspection' && <strong className="inspection-label"> HOLD POINT</strong>}</td><td>{metadata.trade || 'Unassigned'}</td><td>{formatShortDate(item.start_date, { includeYear: true })}</td><td>{formatShortDate(item.end_date, { includeYear: true })}</td><td>{workdayDuration(item.start_date, item.end_date)}</td><td>{(item.depends_on || []).map(id => dependencyFor(item, id)).join('; ') || '-'}</td><td>{metadata.references || '-'}</td></tr>
+              return <tr key={item.id} className={metadata.type === 'inspection' ? 'inspection-row' : ''}><td>{item.needs_contractor_discussion && <strong style={{ color: '#b26a00' }}>⚑ DISCUSS </strong>}{item.name.replace(/^INSPECTION - /, '')}{metadata.type === 'inspection' && <strong className="inspection-label"> HOLD POINT</strong>}</td><td>{metadata.trade || 'Unassigned'}</td><td>{formatShortDate(item.start_date, { includeYear: true })}</td><td>{formatShortDate(item.end_date, { includeYear: true })}</td><td>{workdayDuration(item.start_date, item.end_date)}</td><td>{(item.depends_on || []).map(id => dependencyFor(item, id)).join('; ') || '-'}</td><td>{metadata.references || '-'}</td></tr>
             })}</tbody>
           </table>
         </section>

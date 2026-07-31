@@ -7,6 +7,7 @@ const ACTION_COLORS = {
   inspection: '#ff9f0a',
   bid: '#0a84ff',
   decision: '#ffd60a',
+  discussion: '#ff9f0a',
   budget: '#ff453a',
 }
 

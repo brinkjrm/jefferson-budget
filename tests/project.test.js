@@ -41,7 +41,7 @@ test('project metrics aggregate budget, schedule, inspections, and decisions', (
     drawSheets: [{ this_draw_amount: 25 }],
     scheduleTasks: [
       { id: 'phase', parent_id: null },
-      { id: 'work', parent_id: 'phase', status: 'complete', start_date: '2026-01-01', end_date: '2026-01-02' },
+      { id: 'work', parent_id: 'phase', status: 'complete', start_date: '2026-01-01', end_date: '2026-01-02', needs_contractor_discussion: true, trade: 'GC' },
       { id: 'inspection', parent_id: 'phase', task_type: 'inspection', status: 'not_started', depends_on: ['work'], start_date: '2026-01-05', end_date: '2026-01-05' },
     ],
     bids: [{ status: 'pending' }],
@@ -55,6 +55,7 @@ test('project metrics aggregate budget, schedule, inspections, and decisions', (
   assert.equal(metrics.financials.drawsTotal, 25)
   assert.equal(metrics.schedule.progressPercent, 50)
   assert.equal(metrics.schedule.readyInspections.length, 1)
+  assert.equal(metrics.schedule.contractorDiscussions.length, 1)
   assert.equal(metrics.procurement.pendingBids.length, 1)
   assert.equal(metrics.procurement.tbdSelections.length, 1)
 
@@ -63,4 +64,5 @@ test('project metrics aggregate budget, schedule, inspections, and decisions', (
   assert.ok(actions.some(action => action.type === 'bid'))
   assert.ok(actions.some(action => action.type === 'decision'))
   assert.ok(actions.some(action => action.type === 'budget'))
+  assert.ok(actions.some(action => action.type === 'discussion'))
 })

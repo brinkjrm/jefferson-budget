@@ -1,6 +1,7 @@
 const SCHEDULE_FIELDS = [
   'id', 'name', 'parent_id', 'start_date', 'end_date', 'status', 'sort_order',
   'color', 'depends_on', 'dependency_settings', 'task_type', 'trade', 'plan_references',
+  'needs_contractor_discussion',
 ]
 
 const SELECTION_FIELDS = [
@@ -25,4 +26,3 @@ export function publicScheduleTask(row) {
 export function publicSelection(row) {
   return pick(row, SELECTION_FIELDS)
 }
-

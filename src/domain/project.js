@@ -98,6 +98,7 @@ export function calculateProjectMetrics(model, today = new Date()) {
   const blockedTasks = tasks.filter(task => task.status === 'blocked')
   const inProgressTasks = tasks.filter(task => task.status === 'in_progress')
   const inspectionTasks = tasks.filter(task => task.task_type === 'inspection')
+  const contractorDiscussions = tasks.filter(task => task.needs_contractor_discussion)
   const passedInspections = inspectionTasks.filter(task => task.status === 'complete')
   const pendingBids = bids.filter(bid => bid.status === 'pending')
   const tbdSelections = selections.filter(item => item.status === 'TBD')
@@ -141,6 +142,7 @@ export function calculateProjectMetrics(model, today = new Date()) {
       inspections: inspectionTasks,
       passedInspections,
       readyInspections,
+      contractorDiscussions,
       start: minValue(tasks.map(task => task.start_date)),
       finish: maxValue(tasks.map(task => task.end_date)),
     },
@@ -155,6 +157,15 @@ export function calculateProjectMetrics(model, today = new Date()) {
 
 export function buildActionItems(model, metrics) {
   const actions = []
+
+  metrics.schedule.contractorDiscussions.forEach(task => actions.push({
+    id: `contractor-discussion-${task.id}`,
+    type: 'discussion',
+    priority: 2,
+    title: `Discuss with contractor: ${task.name}`,
+    detail: `Scheduled ${task.start_date || 'date TBD'}${task.trade ? ` · ${task.trade}` : ''}.`,
+    tab: 'Schedule',
+  }))
 
   metrics.schedule.blocked.forEach(task => actions.push({
     id: `blocked-${task.id}`,

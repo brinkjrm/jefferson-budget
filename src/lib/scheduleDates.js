@@ -367,7 +367,7 @@ export function applyTaskChange(tasks, taskId, patch) {
 }
 
 export function sameScheduleTask(a, b) {
-  const fields = ['name', 'parent_id', 'start_date', 'end_date', 'status', 'sort_order', 'color']
+  const fields = ['name', 'parent_id', 'start_date', 'end_date', 'status', 'sort_order', 'color', 'needs_contractor_discussion']
   return fields.every(field => a?.[field] === b?.[field])
     && JSON.stringify(a?.depends_on || []) === JSON.stringify(b?.depends_on || [])
     && JSON.stringify(dependencySettingsFor(a)) === JSON.stringify(dependencySettingsFor(b))

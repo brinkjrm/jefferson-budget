@@ -219,6 +219,7 @@ function SharedSchedule({ tasks, notes, token, onNoteAdded }) {
                       <div className="truncate" style={{ color: phase ? '#fff' : '#ebebf5', fontSize: phase ? 13 : 12, fontWeight: phase ? 700 : 500 }}>
                         {phase && <span style={{ color, marginRight: 7 }}>{collapsed.has(task.id) ? '▶' : '▼'}</span>}
                         {isInspection && <span style={{ color: '#ff9f0a', marginRight: 5 }}>◆</span>}
+                        {!phase && task.needs_contractor_discussion && <span style={{ color: '#ffb340', marginRight: 5 }} title="Needs contractor discussion">⚑</span>}
                         {(task.name || '').replace(/^INSPECTION\s*-\s*/i, '')}
                         {!phase && (
                           <span style={{ color: taskNotes.length ? '#0a84ff' : '#636366', marginLeft: 7, fontSize: 10, whiteSpace: 'nowrap' }}>
@@ -319,6 +320,11 @@ function TaskNotesDialog({ task, notes, token, onNoteAdded, onClose }) {
         </div>
 
         <div className="px-5 py-4 overflow-y-auto" style={{ maxHeight: 'calc(88vh - 86px)' }}>
+          {task.needs_contractor_discussion && (
+            <div className="mb-4 text-sm" style={{ color: '#ffb340' }}>
+              ⚑ Josh has flagged this task for contractor discussion.
+            </div>
+          )}
           <div className="mb-5">
             {notes.length ? notes.map(note => (
               <div key={note.id} className="mb-3 pb-3" style={{ borderBottom: '1px solid rgba(84,84,88,0.22)' }}>

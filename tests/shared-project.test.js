@@ -14,6 +14,7 @@ test('shared schedule returns operational fields without private notes or projec
     sort_order: 1,
     depends_on: ['task-0'],
     dependency_settings: { 'task-0': { type: 'FS', lag: 0 } },
+    needs_contractor_discussion: true,
     trade: 'Framing',
     notes: 'Owner-only negotiation detail',
     internal_cost: 25000,
@@ -22,6 +23,7 @@ test('shared schedule returns operational fields without private notes or projec
   assert.equal(shared.name, 'Framing')
   assert.deepEqual(shared.depends_on, ['task-0'])
   assert.equal(shared.trade, 'Framing')
+  assert.equal(shared.needs_contractor_discussion, true)
   assert.equal('project_id' in shared, false)
   assert.equal('notes' in shared, false)
   assert.equal('internal_cost' in shared, false)

@@ -108,6 +108,13 @@ test('tasks are chronologically sorted within each phase after dates change', ()
   assert.deepEqual(ordered.map(task => task.sort_order), [1, 2, 3])
 })
 
+test('contractor discussion flag is detected as a schedule change', () => {
+  const before = [{ id: 'a', parent_id: 'phase', needs_contractor_discussion: false }]
+  const after = [{ ...before[0], needs_contractor_discussion: true }]
+
+  assert.deepEqual(changedScheduleRows(before, after), after)
+})
+
 test('a successor cannot be dated before its selected predecessor finishes', () => {
   const tasks = [
     { id: 'a', parent_id: 'phase', start_date: '2026-08-03', end_date: '2026-08-07', depends_on: [] },

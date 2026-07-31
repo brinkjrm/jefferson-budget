@@ -38,6 +38,11 @@
   <style>
     * { -webkit-font-smoothing: antialiased; }
     body { background-color: #000000; color: #ffffff; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, a:focus-visible {
+      outline: 3px solid rgba(10, 132, 255, 0.45);
+      outline-offset: 2px;
+    }
 
     .row-locked  { background-color: rgba(48, 209, 88, 0.08); }
     .row-pending { background-color: transparent; }
@@ -61,26 +66,51 @@
     }
 
     .tab-active {
-      background: rgba(10, 132, 255, 0.18);
+      background: transparent;
       color: #0a84ff;
+      border-radius: 0 !important;
+      box-shadow: inset 0 -2px 0 #0a84ff;
     }
 
     .btn-primary {
       background: #0a84ff;
       color: #fff;
-      border-radius: 10px;
+      border: 0;
+      border-radius: 8px;
       font-weight: 600;
-      transition: opacity .15s;
+      box-shadow: none;
+      transition: opacity .15s, transform .15s;
     }
     .btn-primary:hover { opacity: 0.85; }
+    .btn-primary:active { transform: scale(0.98); }
     .btn-secondary {
-      background: #2c2c2e;
+      background: transparent;
       color: #0a84ff;
-      border-radius: 10px;
+      border: 0;
+      border-radius: 8px;
       font-weight: 600;
-      transition: background .15s;
+      box-shadow: none;
+      transition: background .15s, opacity .15s;
     }
-    .btn-secondary:hover { background: #3a3a3c; }
+    .btn-secondary:hover { background: rgba(10, 132, 255, 0.10); }
+    .btn-secondary:active { opacity: 0.65; }
+    .btn-secondary:disabled, .btn-primary:disabled { opacity: 0.38; }
+
+    .icon-action {
+      background: transparent;
+      border: 0;
+      border-radius: 50%;
+      color: #0a84ff;
+      transition: background .15s, opacity .15s;
+    }
+    .icon-action:hover { background: rgba(10, 132, 255, 0.10); }
+    .icon-action:active { opacity: 0.6; }
+
+    button.apple-card {
+      border-color: transparent;
+      box-shadow: none;
+    }
+    button.apple-card:hover { background: #242426; }
 
     .apple-card {
       background: #1c1c1e;

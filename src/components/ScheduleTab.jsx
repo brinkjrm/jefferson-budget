@@ -799,15 +799,12 @@ export default function ScheduleTab() {
                       {isPhase && (
                         <button
                           type="button"
+                          className="icon-action"
                           onClick={event => { event.stopPropagation(); addTask(task.id) }}
                           aria-label={`Add task to ${task.name}`}
                           title={`Add a task to ${task.name}`}
                           style={{
                             flexShrink: 0,
-                            color: '#0a84ff',
-                            background: 'rgba(10,132,255,0.12)',
-                            border: '1px solid rgba(10,132,255,0.28)',
-                            borderRadius: 6,
                             width: 24,
                             height: 24,
                             fontSize: 16,

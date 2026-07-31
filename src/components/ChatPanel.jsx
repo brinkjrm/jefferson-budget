@@ -129,8 +129,7 @@ export default function ChatPanel() {
             {messages.length > 0 && (
               <button
                 onClick={() => setMessages([])}
-                className="ml-auto text-xs px-2 py-1 rounded-lg"
-                style={{ background: '#3a3a3c', color: '#8e8e93' }}
+                className="ml-auto text-xs px-2 py-1 btn-secondary"
               >
                 Clear
               </button>
@@ -149,10 +148,8 @@ export default function ChatPanel() {
                     <button
                       key={s}
                       onClick={() => send(s)}
-                      className="w-full text-left text-sm px-3 py-2 rounded-xl transition-colors"
-                      style={{ background: '#2c2c2e', color: '#0a84ff', border: '1px solid rgba(10,132,255,0.25)' }}
-                      onMouseOver={e => e.currentTarget.style.background = '#3a3a3c'}
-                      onMouseOut={e => e.currentTarget.style.background = '#2c2c2e'}
+                      className="w-full text-left text-sm px-3 py-2 btn-secondary"
+                      style={{ borderBottom: '1px solid rgba(84,84,88,0.22)', borderRadius: 0 }}
                     >
                       {s}
                     </button>

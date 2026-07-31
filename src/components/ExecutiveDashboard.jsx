@@ -108,8 +108,11 @@ export default function ExecutiveDashboard({ onNavigate }) {
 
 function MetricCard({ label, value, detail, color, onClick }) {
   return (
-    <button onClick={onClick} className="apple-card p-4 text-left transition-transform hover:-translate-y-0.5" style={{ borderLeft: `3px solid ${color}` }}>
-      <div className="text-xs uppercase tracking-wider text-lbl2">{label}</div>
+    <button onClick={onClick} className="apple-card p-4 text-left transition-colors">
+      <div className="flex items-center gap-2">
+        <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
+        <div className="text-xs uppercase tracking-wider text-lbl2">{label}</div>
+      </div>
       <div className="text-2xl font-bold mt-1" style={{ color }}>{value}</div>
       <div className="text-xs text-lbl3 mt-1">{detail}</div>
     </button>
@@ -130,4 +133,3 @@ function formatDate(value) {
   if (!value) return '—'
   return new Date(`${value}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
-

@@ -139,10 +139,11 @@ export default function SelectionsTab() {
               key={s}
               onClick={() => setStatusFilter(s)}
               style={{
-                padding: '5px 12px', borderRadius: 8, fontSize: 11, fontWeight: 600,
-                background: statusFilter === s ? (s === 'ALL' ? '#0a84ff' : STATUS[s]?.bg || '#0a84ff') : 'rgba(84,84,88,0.2)',
-                color: statusFilter === s ? (s === 'ALL' ? '#fff' : STATUS[s]?.text || '#fff') : '#8e8e93',
-                border: `1px solid ${statusFilter === s ? (s === 'ALL' ? '#0a84ff' : STATUS[s]?.border || '#0a84ff') : 'transparent'}`,
+                padding: '5px 10px', borderRadius: 0, fontSize: 11, fontWeight: 600,
+                background: 'transparent',
+                color: statusFilter === s ? (s === 'ALL' ? '#0a84ff' : STATUS[s]?.text || '#0a84ff') : '#8e8e93',
+                border: 0,
+                boxShadow: statusFilter === s ? `inset 0 -2px 0 ${s === 'ALL' ? '#0a84ff' : STATUS[s]?.text || '#0a84ff'}` : 'none',
               }}
             >
               {s === 'ALL' ? 'All' : STATUS[s]?.label}

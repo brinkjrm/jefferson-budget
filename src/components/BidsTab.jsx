@@ -461,10 +461,10 @@ function BidCard({ bid, expanded, onExpand, onAccept, onDismiss, onContractor })
         )}
         {bid.status === 'pending' && (
           <>
-            <button onClick={onDismiss} style={{ flex: 1, padding: '8px 4px', fontSize: 11, fontWeight: 700, color: '#ff453a', background: 'rgba(255,69,58,0.1)', textAlign: 'center' }}>
+            <button onClick={onDismiss} style={{ flex: 1, padding: '8px 4px', fontSize: 11, fontWeight: 700, color: '#ff453a', background: 'transparent', textAlign: 'center' }}>
               Dismiss
             </button>
-            <button onClick={onAccept} style={{ flex: 1, padding: '8px 4px', fontSize: 11, fontWeight: 700, color: '#30d158', background: 'rgba(48,209,88,0.1)', textAlign: 'center' }}>
+            <button onClick={onAccept} style={{ flex: 1, padding: '8px 4px', fontSize: 11, fontWeight: 700, color: '#30d158', background: 'transparent', textAlign: 'center' }}>
               Accept
             </button>
           </>

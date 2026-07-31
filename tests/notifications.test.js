@@ -55,6 +55,17 @@ test('forwarded bid chooses the vendor represented by the attachment', () => {
   assert.equal(result.contact.trade, 'Surveying')
 })
 
+test('roof and gutter proposals retain the combined trade', () => {
+  const result = classifyProjectEmailHeuristically({
+    subject: 'GreenPoint roof and gutter quote',
+    body: 'From: Scott <scott@greenpointroofing.com>',
+    attachments: [{ filename: 'Roof-and-Gutter-Quote.pdf' }],
+  })
+
+  assert.equal(result.contact.trade, 'Roofing & Gutters')
+  assert.equal(result.bid.trade, 'Roofing & Gutters')
+})
+
 test('daily SMS highlights critical actions, invoices, and schedule gates', () => {
   const summary = buildDailySmsSummary({
     projectName: 'Jefferson',

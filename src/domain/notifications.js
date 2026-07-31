@@ -167,6 +167,7 @@ function phoneNearEmail(body, email) {
 }
 
 function inferTrade(text = '') {
+  if (text.includes('roof') && text.includes('gutter')) return 'Roofing & Gutters'
   return TRADE_KEYWORDS.find(([, terms]) => terms.some(term => text.includes(term)))?.[0] || null
 }
 

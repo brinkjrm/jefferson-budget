@@ -292,10 +292,10 @@ function normalizeClassification(value, fallback) {
     company: textOrNull(value.contact.company) || fallback.contact?.company || null,
     email: textOrNull(value.contact.email)?.toLowerCase() || fallback.contact?.email || null,
     phone: textOrNull(value.contact.phone) || fallback.contact?.phone || null,
-    trade: textOrNull(value.contact.trade) || fallback.contact?.trade || null,
+    trade: fallback.contact?.trade || textOrNull(value.contact.trade) || null,
   } : fallback.contact
   const bid = value.bid && typeof value.bid === 'object' ? {
-    trade: textOrNull(value.bid.trade) || fallback.bid?.trade || null,
+    trade: fallback.bid?.trade || textOrNull(value.bid.trade) || null,
     description: textOrNull(value.bid.description) || fallback.bid?.description || null,
     totalAmount: finiteNumberOrNull(value.bid.totalAmount) ?? fallback.bid?.totalAmount ?? null,
     lineItems: Array.isArray(value.bid.lineItems) ? value.bid.lineItems.slice(0, 100) : [],
